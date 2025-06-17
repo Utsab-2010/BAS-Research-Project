@@ -50,13 +50,9 @@ while sim.getSimulationTime() < 50:
     points = np.array(points, dtype=np.float32).reshape(-1, 3)
     xy = points[:, :2]  # shape (N, 2)
     # Settings
-
-
-# Map lidar points to image coordinates
+    # Map lidar points to image coordinates
     img_points = np.int32(xy * scale + center)
-
     img = np.zeros((img_size, img_size, 3), dtype=np.uint8)
-
     # Draw each point
     for pt in img_points:
         cv2.circle(img, tuple(pt), 2, (0, 255, 0), -1)

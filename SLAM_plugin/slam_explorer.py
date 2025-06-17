@@ -122,7 +122,7 @@ def grid_to_world(i, j):
 #         # Mark endpoint as occupied
 #         if 0 <= end_i < rows and 0 <= end_j < cols:
 #             grid[end_i, end_j] = 2
-def update_grid(robot_pose, lidar_points, occupied_radius_cells=1):
+def update_grid(robot_pose, lidar_points, occupied_radius_cells=2):
     x_robot, y_robot, theta = robot_pose
     robot_i, robot_j = world_to_grid(x_robot, y_robot)
     for x_rel, y_rel in lidar_points:

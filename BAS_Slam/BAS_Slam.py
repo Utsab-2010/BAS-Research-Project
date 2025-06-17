@@ -105,23 +105,6 @@ def grid_to_world(i, j):
     y = i * cell_size + origin_y
     return x, y
 
-# def update_grid(robot_pose, lidar_points):
-
-#     x_robot, y_robot, theta = robot_pose
-#     robot_i, robot_j = world_to_grid(x_robot, y_robot)
-#     for x_rel, y_rel in lidar_points:
-#         # Transform to world coordinates
-#         x_world = x_robot + x_rel * np.cos(theta) - y_rel * np.sin(theta)
-#         y_world = y_robot + x_rel * np.sin(theta) + y_rel * np.cos(theta)
-#         end_i, end_j = world_to_grid(x_world, y_world)
-#         line_cells = get_line((robot_i, robot_j), (end_i, end_j))
-#         # Mark free cells
-#         for cell in line_cells[:-1]:
-#             if 0 <= cell[0] < rows and 0 <= cell[1] < cols:
-#                 grid[cell[0], cell[1]] = 1
-#         # Mark endpoint as occupied
-#         if 0 <= end_i < rows and 0 <= end_j < cols:
-#             grid[end_i, end_j] = 2
 def update_grid(robot_pose, lidar_points, occupied_radius_cells=1):
     x_robot, y_robot, theta = robot_pose
     robot_i, robot_j = world_to_grid(x_robot, y_robot)
@@ -153,6 +136,44 @@ def show_grid(grid):
     cv2.imshow('Occupancy Grid', img_color)
     cv2.waitKey(1)
  
+# def
+
+def pose_cost(grid, pose, radius, value_map):
+    """
+    grid: 2D numpy array (0=free, 1=occupied, 2=unexplored)
+    pose: (i, j) grid indices
+    radius: radius in cells to consider
+    value_map: dict mapping grid values to cost (e.g., {0: 0, 1: 1, 2: 0.7})
+    """
+    rows, cols = grid.shape
+    i0, j0 = pose
+    values = []
+    for di in range(-radius, radius + 1):
+        for dj in range(-radius, radius + 1):
+            ni, nj = i0 + di, j0 + dj
+            if 0 <= ni < rows and 0 <= nj < cols:
+                # Optional: use circular mask
+                if di**2 + dj**2 <= radius**2:
+                    cell_value = grid[ni, nj]
+                    values.append(value_map.get(cell_value, 0))
+    if values:
+        return sum(values) / len(values)
+    else:
+        return 1  # High cost if no valid cells
+
+
+
+def BAS_target(pose,d,D):
+    angle = np.random.uniform(0, 2 * np.pi)
+    b = np.array([np.cos(angle), np.sin(angle)])
+    p_l = pose - d*b
+    p_r = pose + d*b
+    target = pose + D*b*(pose_cost(p_l)-pose_cost(p_r))/abs(pose_cost(p_l)-pose_cost(p_r))
+
+
+
+
+
 
 # Connect to CoppeliaSim
 client = RemoteAPIClient()
