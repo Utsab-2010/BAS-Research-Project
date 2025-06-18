@@ -213,7 +213,7 @@ def nav_to_target(target):
         if dist < 0.1:
             print("Reached target")
             break
-        if abs(alpha) >0.1:
+        if abs(alpha) >0.17:
             set_movement(bot_wheels, 0, 0, -2* alpha)  
         else:
             set_movement(bot_wheels, 5*dist+1, 0, 0)
@@ -226,8 +226,6 @@ def world_to_bot_frame(global_point, bot_position, bot_theta):
     x_local =  np.cos(-bot_theta) * dx - np.sin(-bot_theta) * dy
     y_local =  np.sin(-bot_theta) * dx + np.cos(-bot_theta) * dy
     return np.array([x_local, y_local])
-
-
 
 
 
