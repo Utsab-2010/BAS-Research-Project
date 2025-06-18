@@ -28,6 +28,8 @@ def plot_lidar(points):
 
     show_grid(grid)
 
+    BAS_target(grid,robo_pose[:2],2,0.2)
+
 
     # print(xy)
     # Settings
@@ -72,9 +74,22 @@ def get_line(start, end):
         if error < 0:
             y += ystep
             error += dx
+        # print(points)
     if swapped:
         points.reverse()
     return points
+
+def check_dir(grid,start,end,thickness=1):
+    line_cells = get_line(start, end)
+    for i, j in line_cells:
+        # Check a square of size (2*thickness+1) around (i, j)
+        for di in range(-thickness, thickness + 1):
+            for dj in range(-thickness, thickness + 1):
+                ni, nj = i + di, j + dj
+                if 0 <= ni < grid.shape[0] and 0 <= nj < grid.shape[1]:
+                    if grid[ni, nj] == 2:
+                        return True
+    return False
 
 k = 1
 # Parameters
@@ -138,38 +153,44 @@ def show_grid(grid):
  
 # def
 
-def pose_cost(grid, pose, radius, value_map):
-    """
-    grid: 2D numpy array (0=free, 1=occupied, 2=unexplored)
-    pose: (i, j) grid indices
-    radius: radius in cells to consider
-    value_map: dict mapping grid values to cost (e.g., {0: 0, 1: 1, 2: 0.7})
-    """
+def pose_cost(grid, pose,target, radius, value_map):
+    
     rows, cols = grid.shape
-    i0, j0 = pose
+    i0, j0 = pose[:2]
+    i0, j0 = world_to_grid(i0, j0)
     values = []
     for di in range(-radius, radius + 1):
         for dj in range(-radius, radius + 1):
             ni, nj = i0 + di, j0 + dj
+            print("ni,nj:",ni,nj)
             if 0 <= ni < rows and 0 <= nj < cols:
                 # Optional: use circular mask
-                if di**2 + dj**2 <= radius**2:
-                    cell_value = grid[ni, nj]
-                    values.append(value_map.get(cell_value, 0))
-    if values:
+                # if di**2 + dj**2 <= radius**2:
+                cell_value = grid[ni, nj]
+                print("cell_value:",cell_value)
+                values.append(value_map.get(cell_value, 0))
+    start = world_to_grid(pose[0], pose[1])
+    end = world_to_grid(target[0], target[1])
+
+    if check_dir(grid,start,end):
+        return 999
+    elif values:
         return sum(values) / len(values)
     else:
         return 1  # High cost if no valid cells
 
 
 
-def BAS_target(pose,d,D):
+def BAS_target(grid,pose,d,D):
+    radius = 2
+    value_map = {0: 0, 1: 1, 2: 999}  # Unknown=1, Free=0, Occupied=999
     angle = np.random.uniform(0, 2 * np.pi)
     b = np.array([np.cos(angle), np.sin(angle)])
     p_l = pose - d*b
     p_r = pose + d*b
-    target = pose + D*b*(pose_cost(p_l)-pose_cost(p_r))/abs(pose_cost(p_l)-pose_cost(p_r))
-
+    target = pose + D*b*(pose_cost(grid,pose,p_l,radius,value_map)-pose_cost(grid,pose,p_r,radius,value_map))/abs(pose_cost(grid,pose,p_l,radius,value_map)-pose_cost(grid,pose,p_r,radius,value_map))
+    print("target:",target)
+    return target
 
 
 
