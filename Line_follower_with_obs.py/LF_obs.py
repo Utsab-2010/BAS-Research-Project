@@ -63,8 +63,16 @@ def plot_lidar(points):
     show_grid(grid)
     # wall_follow_right(xy)
 
-def wall_follow_right(lidar_points):
+def get_lidar_points():
+    myData = sim.getBufferProperty(sim.handle_scene, "customData.lidar_points", {'noError' : True})
+        # myData = sim.getFloatArrayProperty(sim.handle_scene, "lidar", dict options = {})
+    points = sim.unpackTable(myData)
+    # plot_lidar(points) 
+    points = np.array(points, dtype=np.float32).reshape(-1, 3)
+    return points[:,:2]
 
+def wall_follow_right(lidar_points):
+    
     side_dist = np.linalg.norm(lidar_points[int(len(lidar_points)*(30/240))])       # directly right
     front_side_dist = np.linalg.norm(lidar_points[int(len(lidar_points)*(75/240))]) # 45° front-right
     Ka=0.4
@@ -73,10 +81,11 @@ def wall_follow_right(lidar_points):
     wall_angle = side_dist - front_side_dist
     correction = Kp * error + Ka*wall_angle
     basespeed=4
-    if np.linalg.norm(lidar_points[int(len(lidar_points)*(120/240))])  < 1:
+    while np.linalg.norm(lidar_points[int(len(lidar_points)*(120/240))])  < 1:
         # turn_left()
         set_movement(bot_wheels,0,0,1)
         time.sleep(0.5)
+        lidar_points = get_lidar_points()
     else:
         # left_speed = base_speed + correction
         # right_speed = base_speed - correction
