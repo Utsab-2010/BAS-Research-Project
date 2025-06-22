@@ -19,18 +19,26 @@ def line_follower(vision_sensor_handle, bot_wheels):
     _, binary = cv2.threshold(gray, 60, 255, cv2.THRESH_BINARY_INV)  # Black=white in binary
 
     # Calculate centroid of the black area (line)
-    M = cv2.moments(binary)
-    cx = int(M['m10'] / M['m00'])
-        
-    if M['m00'] > 0:
+    try:
+    
+        M = cv2.moments(binary)
         cx = int(M['m10'] / M['m00'])
-        cy = int(M['m01'] / M['m00'])
-        # Draw centroid for visualization
-        cv2.circle(img, (cx, cy), 5, (0, 0, 255), -1)
-        # Calculate error from image center
-        error = cx - resX // 2
-    else:
-        error = 0  # No line detected, go straight or stop
+    
+        if M['m00'] > 0:
+            cx = int(M['m10'] / M['m00'])
+            cy = int(M['m01'] / M['m00'])
+            # Draw centroid for visualization
+            cv2.circle(img, (cx, cy), 5, (0, 0, 255), -1)
+            # Calculate error from image center
+            error = cx - resX // 2
+            # print("hi")
+            
+        else:
+            error = 0  # No line detected, go straight or stop
+    except ZeroDivisionError:
+            print("error faced")
+            cv2.imshow('Vision Sensor', img)
+            return
 
 
     # Simple proportional controller for steering
@@ -49,8 +57,32 @@ def plot_lidar(points):
     robo_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
     # print(data)
     # robo_pose = sim.unpackTable(data)
+    
     update_grid(robo_pose, xy)
+    
     show_grid(grid)
+    # wall_follow_right(xy)
+
+def wall_follow_right(lidar_points):
+
+    side_dist = np.linalg.norm(lidar_points[int(len(lidar_points)*(30/240))])       # directly right
+    front_side_dist = np.linalg.norm(lidar_points[int(len(lidar_points)*(75/240))]) # 45° front-right
+    Ka=0.4
+    Kp=0.4
+    error = 0.5 - side_dist
+    wall_angle = side_dist - front_side_dist
+    correction = Kp * error + Ka*wall_angle
+    basespeed=4
+    if np.linalg.norm(lidar_points[int(len(lidar_points)*(120/240))])  < 1:
+        # turn_left()
+        set_movement(bot_wheels,0,0,1)
+        time.sleep(0.5)
+    else:
+        # left_speed = base_speed + correction
+        # right_speed = base_speed - correction
+        # print("correctiont:",type(round(correction,2)))
+        set_movement(bot_wheels,basespeed,0,float(round(correction,2)))
+
 
 def get_line(start, end):
 
@@ -217,7 +249,7 @@ def nav_to_target(target):
         angular_velocity = 10 * curvature  # Adjust this factor as needed
         # if abs(alpha) >0.1:
         # set_movement(bot_wheels, 5*dist,0, -3*(alpha)**2)  
-        set_movement(bot_wheels,10,0, -angular_velocity*2)
+        set_movement(bot_wheels,10,0, -angular_velocity)
         # else:
             # set_movement(bot_wheels, 10, 0, 0)
             # time.sleep(1)
@@ -273,19 +305,21 @@ try:
 
     while sim.getSimulationState() != sim.simulation_stopped:
         # Get image from vision sensor
-        # line_follower(vision_sensor_handle, bot_wheels)
+        line_follower(vision_sensor_handle, bot_wheels)
         myData = sim.getBufferProperty(sim.handle_scene, "customData.lidar_points", {'noError' : True})
         # myData = sim.getFloatArrayProperty(sim.handle_scene, "lidar", dict options = {})
         points = sim.unpackTable(myData)
-        plot_lidar(points) 
+        # plot_lidar(points) 
+        points = np.array(points, dtype=np.float32).reshape(-1, 3)
 
+        wall_follow_right(points[:,:2])
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
         robo_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
         # print(robo_pose[2])
-        target = BAS_target(grid,robo_pose[:2],5,3)
+        # target = BAS_target(grid,robo_pose[:2],5,3)
         print("new target iteration")
-        nav_to_target(target)
+        # nav_to_target(target)
         time.sleep(0.1)  # Adjust loop timing as needed
 
 finally:
