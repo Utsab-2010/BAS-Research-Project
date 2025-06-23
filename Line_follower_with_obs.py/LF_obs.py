@@ -4,6 +4,9 @@ from coppeliasim_zmqremoteapi_client import RemoteAPIClient
 import time
 import math
 
+avoid_wall = False
+
+
 def set_movement(bot_wheels,FB_vel,LR_vel,rot):
     sim.setJointTargetVelocity(bot_wheels[0],-FB_vel-LR_vel-rot) 
     sim.setJointTargetVelocity(bot_wheels[1],-FB_vel+LR_vel-rot) 
@@ -25,6 +28,13 @@ def line_follower(vision_sensor_handle, bot_wheels):
         cx = int(M['m10'] / M['m00'])
     
         if M['m00'] > 0:
+            global avoid_wall
+            if avoid_wall:
+                print("refinding line   ")
+                set_movement(bot_wheels,0,0,2)
+                time.sleep(1)
+            avoid_wall = False
+            print("Line detected")
             cx = int(M['m10'] / M['m00'])
             cy = int(M['m01'] / M['m00'])
             # Draw centroid for visualization
@@ -72,21 +82,25 @@ def get_lidar_points():
     return points[:,:2]
 
 def wall_follow_right(lidar_points):
-    
+    global avoid_wall
     side_dist = np.linalg.norm(lidar_points[int(len(lidar_points)*(30/240))])       # directly right
     front_side_dist = np.linalg.norm(lidar_points[int(len(lidar_points)*(75/240))]) # 45° front-right
     Ka=0.4
-    Kp=0.4
-    error = 0.5 - side_dist
+    Kp=0.7
+    error = 0.6 - side_dist
     wall_angle = side_dist - front_side_dist
     correction = Kp * error + Ka*wall_angle
-    basespeed=4
+    basespeed= 5
     while np.linalg.norm(lidar_points[int(len(lidar_points)*(120/240))])  < 1:
         # turn_left()
-        set_movement(bot_wheels,0,0,1)
-        time.sleep(0.5)
+        print("wall in front")
+        avoid_wall = True
+        set_movement(bot_wheels,0,0,2)
+        time.sleep(0.25)
         lidar_points = get_lidar_points()
     else:
+        if avoid_wall==False:
+            return 
         # left_speed = base_speed + correction
         # right_speed = base_speed - correction
         # print("correctiont:",type(round(correction,2)))
@@ -274,6 +288,7 @@ def world_to_bot_frame(global_point, bot_position, bot_theta):
 
 
 
+
 k = 1
 # Parameters
 grid_width = 20*k    # meters
@@ -329,6 +344,7 @@ try:
         # target = BAS_target(grid,robo_pose[:2],5,3)
         print("new target iteration")
         # nav_to_target(target)
+        print(avoid_wall)
         time.sleep(0.1)  # Adjust loop timing as needed
 
 finally:
