@@ -81,29 +81,44 @@ def get_lidar_points():
     points = np.array(points, dtype=np.float32).reshape(-1, 3)
     return points[:,:2]
 
+def get_dist(lidar_points, angle):
+    """
+    Get the distance to the nearest point in the lidar data at a specific angle.
+    angle: angle in degrees
+    """
+    index = int(len(lidar_points) * ((angle + 120)/ 240))  # Assuming 240 points in lidar
+    if index < 0 or index >= len(lidar_points):
+        return float('inf')  # Out of bounds
+    return np.linalg.norm(lidar_points[index])
+
 def wall_follow_right(lidar_points):
     global avoid_wall
-    side_dist = np.linalg.norm(lidar_points[int(len(lidar_points)*(30/240))])       # directly right
-    front_side_dist = np.linalg.norm(lidar_points[int(len(lidar_points)*(75/240))]) # 45° front-right
-    Ka=0.4
-    Kp=0.7
-    error = 0.6 - side_dist
-    wall_angle = side_dist - front_side_dist
-    correction = Kp * error + Ka*wall_angle
-    basespeed= 5
-    while np.linalg.norm(lidar_points[int(len(lidar_points)*(120/240))])  < 1:
+    front_lidar = []
+    side_lidar = 0
+    for i in range(-10,10):
+        front_lidar.append(float(get_dist(lidar_points, i)))
+    for i,data in enumerate(range(-105,-75)):
+        side_lidar += float(get_dist(lidar_points, data))
+        print("side lidar:",side_lidar,i)
+    side_lidar /= 30
+
+    Kp = 0.5
+    correction = Kp*(0.5 - side_lidar)
+    basespeed= 6
+    while min(front_lidar)  < 0.5:
+        front_lidar = []
+        for i in range(-10,10):
+            front_lidar.append(float(get_dist(lidar_points, i)))
         # turn_left()
-        print("wall in front")
+        # print("wall in front")
         avoid_wall = True
         set_movement(bot_wheels,0,0,2)
-        time.sleep(0.25)
+        time.sleep(0.2)
+        # time.sleep(2)
         lidar_points = get_lidar_points()
     else:
         if avoid_wall==False:
             return 
-        # left_speed = base_speed + correction
-        # right_speed = base_speed - correction
-        # print("correctiont:",type(round(correction,2)))
         set_movement(bot_wheels,basespeed,0,float(round(correction,2)))
 
 
