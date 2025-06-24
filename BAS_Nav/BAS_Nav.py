@@ -3,6 +3,8 @@ import cv2
 from coppeliasim_zmqremoteapi_client import RemoteAPIClient
 import time
 import math
+from scipy.ndimage import label,binary_dilation
+
 
 def set_movement(bot_wheels,FB_vel,LR_vel,rot):
     sim.setJointTargetVelocity(bot_wheels[0],-FB_vel-LR_vel-rot) 
@@ -49,7 +51,7 @@ def plot_lidar(points):
     robo_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
     # print(data)
     # robo_pose = sim.unpackTable(data)
-    update_grid(robo_pose, xy)
+    # update_grid(robo_pose, xy)
     show_grid(grid)
 
 def get_line(start, end):
@@ -144,7 +146,7 @@ def show_grid(grid):
     
     img[grid == 1] = 255
     img[grid == 2] = 0
-
+    img[grid == 3] = 100
     img_color = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
     print("Target:", target)
     
@@ -235,17 +237,30 @@ def world_to_bot_frame(global_point, bot_position, bot_theta):
     return np.array([x_local, y_local])
 
 def fill_closed_regions(grid):
-    # Make a copy to avoid modifying the original grid
-    mask = (grid == 0).astype(np.uint8)
-    h, w = mask.shape
-    # Pad the mask to avoid border issues
-    padded = np.pad(mask, pad_width=1, mode='constant', constant_values=0)
-    # Flood fill from the border (all 0s connected to the border will be filled with 1)
-    cv2.floodFill(padded, None, (0, 0), 1)
-    # Remove padding
-    filled = padded[1:-1, 1:-1]
-    # All 0s in 'filled' are inside closed boundaries
-    grid[(filled == 0) & (grid == 0)] = 2
+    mask = (grid == 0)
+    labeled, num_features = label(mask)
+    # Find labels that touch the border
+    border_labels = set(np.unique(np.concatenate([
+        labeled[0, :], labeled[-1, :], labeled[:, 0], labeled[:, -1]
+    ])))
+    # Fill all regions not connected to the border
+    for region in range(1, num_features + 1):
+        if region not in border_labels:
+            grid[labeled == region] = 2
+    return grid
+
+
+def inflate_obstacles(grid, thickness=2):
+    # Create a mask for obstacle cells (value 2)
+    obstacle_mask = (grid == 2)
+    # Create a structuring element (disk or square)
+    struct = np.ones((2*thickness+1, 2*thickness+1), dtype=bool)
+    # Dilate the obstacle mask
+    inflated = binary_dilation(obstacle_mask, structure=struct)
+    # Find the new boundary (cells that are in inflated but not in original obstacle)
+    boundary = inflated & ~obstacle_mask
+    # Set these boundary cells to 1.5 (extended boundary)
+    grid[boundary] = 3
     return grid
 
 mapping = False
@@ -263,7 +278,11 @@ rows = int(grid_height / cell_size)
 # Initialize grid: 0 = unknown, 1 = free, 2 = occupied
 
 grid = np.zeros((rows, cols), dtype=np.uint8) if mapping else np.load("gridMap.npy")
+grid = fill_closed_regions(grid)  # Fill closed regions if mapping is enabled
+grid = inflate_obstacles(grid, thickness=3)  # Inflate obstacles if mapping is enabled
+np.set_printoptions(threshold=np.inf)
 
+print(grid.shape)
 # Set grid origin (world coordinates of grid[0,0])
 origin_x = grid_width // 2
 origin_y = grid_height // 2
@@ -312,7 +331,7 @@ finally:
     sim.stopSimulation()
     cv2.destroyAllWindows()
     if mapping:
-        np.save("gridMap.npy", grid)
+        np.save("gridMap2.npy", grid)
 
 
 # TODO: Add mapping/nav mode as user input
