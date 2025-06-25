@@ -51,7 +51,7 @@ def plot_lidar(points):
     robo_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
     # print(data)
     # robo_pose = sim.unpackTable(data)
-    # update_grid(robo_pose, xy)
+    update_grid(robo_pose, xy)
     show_grid(grid)
 
 def get_line(start, end):
@@ -114,6 +114,7 @@ def grid_to_world(i, j):
     return x, y
 
 def update_grid(robot_pose, lidar_points, occupied_radius_cells=1):
+    global dyna_grid
     x_robot, y_robot, theta = robot_pose
     robot_i, robot_j = world_to_grid(x_robot, y_robot)
     theta -= np.pi / 2  # Adjust theta to match grid orientation
@@ -128,7 +129,7 @@ def update_grid(robot_pose, lidar_points, occupied_radius_cells=1):
         for cell in line_cells[:-1]:
             if 0 <= cell[1] < rows and 0 <= cell[0] < cols:
                 #grid first is row index, second slot is column index
-                grid[cell[1], cell[0]] = 1
+                dyna_grid[cell[1], cell[0]] = 1
         # Mark a region around endpoint as occupied
         if abs(dist-5) < 0.05:
             continue
@@ -138,7 +139,7 @@ def update_grid(robot_pose, lidar_points, occupied_radius_cells=1):
                 # Optional: use a circular mask
                 if di**2 + dj**2 <= occupied_radius_cells**2:
                     if 0 <= ni < rows and 0 <= nj < cols:
-                        grid[nj, ni] = 2
+                        dyna_grid[nj, ni] = 2
 
 def show_grid(grid):
     # Map values to colors: 0=unknown(128), 1=free(255), 2=occupied(0)
@@ -149,43 +150,49 @@ def show_grid(grid):
     img[grid == 3] = 100
     img_color = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
     print("Target:", target)
-    
+    global final_goal
+    fi,fj = world_to_grid(final_goal[0], final_goal[1])
     i,j = world_to_grid(target[0],target[1])  
     # i is the column pixel index, j is the row pixel index | i pixels to the left and j pixels down
     cv2.circle(img_color, (i,j), radius=3, color=(0, 0, 255), thickness=-1)  # Filled red dot for traget
-
+    cv2.circle(img_color, (fi,fj), radius=3, color=(255, 0, 0), thickness=-1)  # Filled blue dot for final goal
     cv2.imshow('Occupancy Grid', img_color)
     cv2.waitKey(1)
  
-def pose_cost(grid, pose,target, radius, value_map):
+def pose_cost(grid, pose,target,goal,  radius=0, value_map={0: 0, 1: 1, 2: 999,3: 999}):
     
-    rows, cols = grid.shape
-    i0, j0 = pose[:2]
-    i0, j0 = world_to_grid(i0, j0)
-    values = []
-    for di in range(-radius, radius + 1):
-        for dj in range(-radius, radius + 1):
-            ni, nj = i0 + di, j0 + dj
-            # print("ni,nj:",ni,nj)
-            if 0 <= ni < rows and 0 <= nj < cols:
-                # Optional: use circular mask
-                # if di**2 + dj**2 <= radius**2:
-                cell_value = grid[nj, ni]
-                # print("cell_value:",cell_value)
-                values.append(value_map.get(cell_value, 0))
+    # rows, cols = grid.shape
+    # i0, j0 = pose[:2]
+    # i0, j0 = world_to_grid(i0, j0)
+    # values = []
+    # for di in range(-radius, radius + 1):
+    #     for dj in range(-radius, radius + 1):
+    #         ni, nj = i0 + di, j0 + dj
+    #         # print("ni,nj:",ni,nj)
+    #         if 0 <= ni < rows and 0 <= nj < cols:
+    #             # Optional: use circular mask
+    #             # if di**2 + dj**2 <= radius**2:
+    #             cell_value = grid[nj, ni]
+    #             # print("cell_value:",cell_value)
+    #             values.append(value_map.get(cell_value, 0))
+    tx,ty = target[:2]
+    tx,ty = world_to_grid(tx, ty)
+    value = grid[ty, tx]
+    global dyna_grid
     start = world_to_grid(pose[0], pose[1])
     end = world_to_grid(target[0], target[1])
 
-    if check_dir(grid,start,end):
+    if check_dir(dyna_grid,start,end):
         print("Direction blocked")
         return 999
-    elif values:
+    elif value in (0,2,3):
         # print("Values:", values)
-        return sum(values) / len(values)
+        return 999  # High cost for occupied cells
     else:
-        return 1  # High cost if no valid cells
+        return float(np.sum((target[:2] - goal[:2])**2))  # High cost if no valid cells
 
-def BAS_target(grid,pose,d,D):
+def BAS_target(grid,pose,goal):
+    global d, D
     radius = 2
     value_map = {0: 0, 1: 1, 2: 999}  # Unknown=1, Free=0, Occupied=999
     angle = np.random.uniform(0, 2 * np.pi)
@@ -193,11 +200,13 @@ def BAS_target(grid,pose,d,D):
     print("dir", b)
     p_l = pose - d*b
     p_r = pose + d*b
-    diff = pose_cost(grid,pose,p_l,radius,value_map)-pose_cost(grid,pose,p_r,radius,value_map)
+    diff = pose_cost(grid,pose,p_l,goal,radius,value_map)-pose_cost(grid,pose,p_r,goal,radius,value_map)
     if diff == 0:
         target = pose
     else :
         target = pose + D*b*(diff/abs(diff))
+        d = 0.95*d + 0.01
+        D = 0.95*D 
     
     # print("target:",target)
     return target
@@ -216,17 +225,17 @@ def nav_to_target(target):
         dist = np.linalg.norm(local)
         alpha = math.atan2(local[1],local[0]) if local[0] != 0 else np.pi/2
         curvature = 2*local[1]/(local[0]**2 + local[1]**2) if local[0] != 0 else 0
-        if dist < 0.3:
+        if dist < 0.2:
             print("Reached target")
             break
         angular_velocity = 10 * curvature  # Adjust this factor as needed
-        # if abs(alpha) >0.1:
-        # set_movement(bot_wheels, 5*dist,0, -3*(alpha)**2)  
-        set_movement(bot_wheels,10,0, -angular_velocity*2)
-        # else:
-            # set_movement(bot_wheels, 10, 0, 0)
-            # time.sleep(1)
-        time.sleep(0.1)  # Adjust loop timing as needed
+        if abs(alpha) >0.3:
+            set_movement(bot_wheels, 0,0, -3*(alpha)*abs(alpha))  
+        # set_movement(bot_wheels,10,0, -angular_velocity*2)
+        else:
+            set_movement(bot_wheels, 5, 0, 0)
+            time.sleep(1)
+        # time.sleep(0.1)  # Adjust loop timing as needed
 
 def world_to_bot_frame(global_point, bot_position, bot_theta):
     dx = global_point[0] - bot_position[0]
@@ -278,11 +287,15 @@ rows = int(grid_height / cell_size)
 # Initialize grid: 0 = unknown, 1 = free, 2 = occupied
 
 grid = np.zeros((rows, cols), dtype=np.uint8) if mapping else np.load("gridMap.npy")
-grid = fill_closed_regions(grid)  # Fill closed regions if mapping is enabled
-grid = inflate_obstacles(grid, thickness=3)  # Inflate obstacles if mapping is enabled
-np.set_printoptions(threshold=np.inf)
+if not mapping:
+    grid = fill_closed_regions(grid)  # Fill closed regions if mapping is enabled
+    grid = inflate_obstacles(grid, thickness=3)  # Inflate obstacles if mapping is enabled
+# np.set_printoptions(threshold=np.inf)
+dyna_grid = np.zeros((rows, cols), dtype=np.uint8)  # Dynamic grid for navigation
+# print(grid.shape)
+d = 3
+D = 2
 
-print(grid.shape)
 # Set grid origin (world coordinates of grid[0,0])
 origin_x = grid_width // 2
 origin_y = grid_height // 2
@@ -318,11 +331,11 @@ try:
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
-        # robo_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
+        robo_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
         # print(robo_pose[2])
-        # target = BAS_target(grid,robo_pose[:2],5,3)
+        target = BAS_target(grid,robo_pose[:2],final_goal)
         print("new target iteration")
-        # nav_to_target(target)
+        nav_to_target(target) 
         time.sleep(0.1)  # Adjust loop timing as needed
 
 finally:
@@ -336,6 +349,6 @@ finally:
 
 # TODO: Add mapping/nav mode as user input
 # TODO: Create the entire nav mode
-# TODO: Add safety around obstacles and fill obstacles in the grid
+# TODO: Add safety around obstacles and fill obstacles in the grid - DONE
 # TODO: add dynamic antenna size
 # TODO: Organize code into differnt files
