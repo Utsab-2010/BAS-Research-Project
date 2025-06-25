@@ -52,7 +52,7 @@ def plot_lidar(points):
     # print(data)
     # robo_pose = sim.unpackTable(data)
     update_grid(robo_pose, xy)
-    show_grid(grid)
+    show_grid(robo_pose,grid)
 
 def get_line(start, end):
 
@@ -141,7 +141,7 @@ def update_grid(robot_pose, lidar_points, occupied_radius_cells=1):
                     if 0 <= ni < rows and 0 <= nj < cols:
                         dyna_grid[nj, ni] = 2
 
-def show_grid(grid):
+def show_grid(robot_pose,grid):
     # Map values to colors: 0=unknown(128), 1=free(255), 2=occupied(0)
     img = np.full(grid.shape, 128, dtype=np.uint8)
     
@@ -153,14 +153,21 @@ def show_grid(grid):
     global final_goal
     fi,fj = world_to_grid(final_goal[0], final_goal[1])
     i,j = world_to_grid(target[0],target[1])  
+    ri, rj = world_to_grid(robot_pose[0], robot_pose[1])
     # i is the column pixel index, j is the row pixel index | i pixels to the left and j pixels down
     cv2.circle(img_color, (i,j), radius=3, color=(0, 0, 255), thickness=-1)  # Filled red dot for traget
-    cv2.circle(img_color, (fi,fj), radius=3, color=(255, 0, 0), thickness=-1)  # Filled blue dot for final goal
+    
+    cv2.drawMarker(
+        img_color, (fi, fj), color=(255,0,0), markerType=cv2.MARKER_TILTED_CROSS,
+        markerSize=10, thickness=1, line_type=cv2.LINE_AA
+    )
+    cv2.circle(img_color, (ri,rj), radius=5, color=(0,255, 0), thickness=-1)  # Filled blue dot for final goal
+
     cv2.imshow('Occupancy Grid', img_color)
     cv2.waitKey(1)
  
 def pose_cost(grid, pose,target,goal,  radius=0, value_map={0: 0, 1: 1, 2: 999,3: 999}):
-    
+    global last_dist_cost
     # rows, cols = grid.shape
     # i0, j0 = pose[:2]
     # i0, j0 = world_to_grid(i0, j0)
@@ -189,7 +196,12 @@ def pose_cost(grid, pose,target,goal,  radius=0, value_map={0: 0, 1: 1, 2: 999,3
         # print("Values:", values)
         return 999  # High cost for occupied cells
     else:
-        return float(np.sum((target[:2] - goal[:2])**2))  # High cost if no valid cells
+        temp = float(np.sum((target[:2] - goal[:2])**2))
+        if temp < last_dist_cost+0.3:
+            last_dist_cost = temp
+            return temp
+        else:
+            return 999
 
 def BAS_target(grid,pose,goal):
     global d, D
@@ -197,24 +209,25 @@ def BAS_target(grid,pose,goal):
     value_map = {0: 0, 1: 1, 2: 999}  # Unknown=1, Free=0, Occupied=999
     angle = np.random.uniform(0, 2 * np.pi)
     b = np.array([np.cos(angle), np.sin(angle)])
-    print("dir", b)
+    # print("dir", b)
     p_l = pose - d*b
     p_r = pose + d*b
     diff = pose_cost(grid,pose,p_l,goal,radius,value_map)-pose_cost(grid,pose,p_r,goal,radius,value_map)
     if diff == 0:
-        target = pose
+        target = np.array([0, 0])  # No direction preference
     else :
         target = pose + D*b*(diff/abs(diff))
-        d = 0.95*d + 0.01
-        D = 0.95*D 
-    
+        
+    d = 0.95*d + 0.01
+    D = 0.95*D 
     # print("target:",target)
     return target
 
 def nav_to_target(target):
-
+    global path_length, cumm_angle 
     # Move towards target
     while True:
+        start_time = time.time()
         myData = sim.getBufferProperty(sim.handle_scene, "customData.lidar_points", {'noError' : True})
         # myData = sim.getFloatArrayProperty(sim.handle_scene, "lidar", dict options = {})
         points = sim.unpackTable(myData)
@@ -225,16 +238,21 @@ def nav_to_target(target):
         dist = np.linalg.norm(local)
         alpha = math.atan2(local[1],local[0]) if local[0] != 0 else np.pi/2
         curvature = 2*local[1]/(local[0]**2 + local[1]**2) if local[0] != 0 else 0
-        if dist < 0.2:
+        if dist < 0.3:
             print("Reached target")
             break
         angular_velocity = 10 * curvature  # Adjust this factor as needed
         if abs(alpha) >0.3:
-            set_movement(bot_wheels, 0,0, -3*(alpha)*abs(alpha))  
+            rot = -1*(alpha)*abs(alpha) - alpha
+            set_movement(bot_wheels, 0,0, rot)  
+            dt = time.time() - start_time
+            cumm_angle += abs(dt*rot*0.05/0.081)*3.14/180
         # set_movement(bot_wheels,10,0, -angular_velocity*2)
         else:
-            set_movement(bot_wheels, 5, 0, 0)
-            time.sleep(1)
+            set_movement(bot_wheels, 5*dist, 0, 0)
+            dt = time.time() - start_time
+            path_length += abs(dt*5*dist*0.05)*3.14/180
+            time.sleep(0.5)
         # time.sleep(0.1)  # Adjust loop timing as needed
 
 def world_to_bot_frame(global_point, bot_position, bot_theta):
@@ -272,33 +290,38 @@ def inflate_obstacles(grid, thickness=2):
     grid[boundary] = 3
     return grid
 
-mapping = False
 
+# =========================Main Code Starts Here=========================
+mapping = False
+# Envrionment setup
 k = 1
-# Parameters
 grid_width = 20*k    # meters
 grid_height = 20*k   # meters
 cell_size = 0.05*k    # meters per cell
-
 # Compute grid size
 cols = int(grid_width / cell_size)
 rows = int(grid_height / cell_size)
-
-# Initialize grid: 0 = unknown, 1 = free, 2 = occupied
-
-grid = np.zeros((rows, cols), dtype=np.uint8) if mapping else np.load("gridMap.npy")
-if not mapping:
-    grid = fill_closed_regions(grid)  # Fill closed regions if mapping is enabled
-    grid = inflate_obstacles(grid, thickness=3)  # Inflate obstacles if mapping is enabled
-# np.set_printoptions(threshold=np.inf)
-dyna_grid = np.zeros((rows, cols), dtype=np.uint8)  # Dynamic grid for navigation
-# print(grid.shape)
-d = 3
-D = 2
-
 # Set grid origin (world coordinates of grid[0,0])
 origin_x = grid_width // 2
 origin_y = grid_height // 2
+
+# Initialize grid/ Load grid from file if mapping is disabled
+grid = np.zeros((rows, cols), dtype=np.uint8) if mapping else np.load("gridMap.npy")
+if not mapping:
+    grid = fill_closed_regions(grid)  # Fill closed regions if mapping is enabled
+    grid = inflate_obstacles(grid, thickness=4)  # Inflate obstacles if mapping is enabled
+dyna_grid = np.zeros((rows, cols), dtype=np.uint8)  # Dynamic grid for navigation
+
+last_dist_cost = 9999
+
+# Navigation parameters
+d = 3 # initial antenna size
+D = 2 # actual lookahead distance
+
+# Navigation Metrics
+path_length = 0.0
+time_taken = 0.0
+cumm_angle = 0.0
 
 # Connect to CoppeliaSim
 client = RemoteAPIClient()
@@ -313,29 +336,41 @@ bot_wheels = [
     sim.getObject('/youBot/rollingJoint_fr')
 ]
 
-final_goal = np.array([2, 1.5])  # Final goal position (not used in this example)
-# Start simulation
+final_goal = np.array([2, 1.5])  # Final goal position 
 target = np.array([0, 0])  # Initial target position
 sim.startSimulation()
 time.sleep(0.5)  # Let the simulation initialize
+start_time = time.time()
 
 try:
-
     while sim.getSimulationState() != sim.simulation_stopped:
-        # Get image from vision sensor
         # line_follower(vision_sensor_handle, bot_wheels)
         myData = sim.getBufferProperty(sim.handle_scene, "customData.lidar_points", {'noError' : True})
-        # myData = sim.getFloatArrayProperty(sim.handle_scene, "lidar", dict options = {})
         points = sim.unpackTable(myData)
-        plot_lidar(points) 
+        robo_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
 
+        plot_lidar(points) 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
-        robo_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
-        # print(robo_pose[2])
+
+        if np.linalg.norm(robo_pose[:2] - final_goal) < 0.5:
+            print("--------------Reached final goal--------------")
+            end_time = time.time()
+            time_taken = end_time - start_time
+            print(f"Time taken: {time_taken:.2f} seconds")
+            print(f"Path length: {path_length:.2f} meters")
+            print(f"Cumulative angle turned: {cumm_angle:.2f} radians")
+            print(f"Final pose: {robo_pose}")
+            print("--------------Simulation Ended--------------")
+            break
+
         target = BAS_target(grid,robo_pose[:2],final_goal)
         print("new target iteration")
-        nav_to_target(target) 
+
+        if target.any() :
+            nav_to_target(target)
+        else:
+            set_movement(bot_wheels, 0, 0, 0)  # Stop the robot if no target 
         time.sleep(0.1)  # Adjust loop timing as needed
 
 finally:
@@ -348,7 +383,7 @@ finally:
 
 
 # TODO: Add mapping/nav mode as user input
-# TODO: Create the entire nav mode
+# TODO: Create the entire nav mode - DONE
 # TODO: Add safety around obstacles and fill obstacles in the grid - DONE
-# TODO: add dynamic antenna size
+# TODO: add dynamic antenna size - DONE
 # TODO: Organize code into differnt files
