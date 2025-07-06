@@ -22,18 +22,16 @@ def line_follower(vision_sensor_handle, bot_wheels):
     _, binary = cv2.threshold(gray, 60, 255, cv2.THRESH_BINARY_INV)  # Black=white in binary
 
     # Calculate centroid of the black area (line)
+    global avoid_wall
     try:
     
         M = cv2.moments(binary)
         cx = int(M['m10'] / M['m00'])
     
         if M['m00'] > 0:
-            global avoid_wall
-            if avoid_wall:
-                print("refinding line   ")
-                set_movement(bot_wheels,0,0,2)
-                time.sleep(1)
-            avoid_wall = False
+            # global avoid_wall
+
+            # avoid_wall = False
             print("Line detected")
             cx = int(M['m10'] / M['m00'])
             cy = int(M['m01'] / M['m00'])
@@ -41,6 +39,29 @@ def line_follower(vision_sensor_handle, bot_wheels):
             cv2.circle(img, (cx, cy), 5, (0, 0, 255), -1)
             # Calculate error from image center
             error = cx - resX // 2
+
+            ys, xs = np.where(binary > 0)
+
+            if len(xs) >= 50:
+                coords = np.column_stack((xs, ys)).astype(np.float32)
+
+                # Perform PCA to estimate line orientation
+                mean, eigenvectors = cv2.PCACompute(coords, mean=None)
+                vx, vy = eigenvectors[0]
+                angle_rad = math.atan2(vy, vx)
+            else:
+                angle_rad = 0  # Fallback
+
+
+            if avoid_wall :
+                ROTATION_GAIN = 1.0  # Tune this
+                angular_z = -ROTATION_GAIN * angle_rad  # Negative to correct direction
+                angular_z = np.clip(angular_z, -3.0, 3.0)  # Limit max rotation speed
+
+                set_movement(bot_wheels, 0, 0, angular_z)
+                time.sleep(0.3)  # Small timed adjustment
+                avoid_wall = False
+            # avoid_wall=False
             # print("hi")
             
         else:
@@ -50,6 +71,7 @@ def line_follower(vision_sensor_handle, bot_wheels):
             cv2.imshow('Vision Sensor', img)
             return
 
+    
 
     # Simple proportional controller for steering
     Kp = 0.05
@@ -58,6 +80,8 @@ def line_follower(vision_sensor_handle, bot_wheels):
     set_movement(bot_wheels,base_speed/(1+0.05*abs(error)),0,Kp*error)
     # Show vision sensor image (optional)
     cv2.imshow('Vision Sensor', img)
+
+
 
 def plot_lidar(points):
     points = np.array(points, dtype=np.float32).reshape(-1, 3)
@@ -86,7 +110,8 @@ def get_dist(lidar_points, angle):
     Get the distance to the nearest point in the lidar data at a specific angle.
     angle: angle in degrees
     """
-    index = int(len(lidar_points) * ((angle + 120)/ 240))  # Assuming 240 points in lidar
+    print(len(lidar_points))
+    index = int(len(lidar_points) * ((angle +120)/ 240))  # Assuming 240 points in lidar
     if index < 0 or index >= len(lidar_points):
         return float('inf')  # Out of bounds
     return np.linalg.norm(lidar_points[index])
@@ -94,26 +119,32 @@ def get_dist(lidar_points, angle):
 def wall_follow_right(lidar_points):
     global avoid_wall
     front_lidar = []
-    side_lidar = 0
-    for i in range(-10,10):
-        front_lidar.append(float(get_dist(lidar_points, i)))
-    for i,data in enumerate(range(-105,-75)):
-        side_lidar += float(get_dist(lidar_points, data))
-        print("side lidar:",side_lidar,i)
-    side_lidar /= 30
+    side_lidar = 5
+    for point in lidar_points:
+        angle = points_to_angles(point)
+        if abs(angle -90) < 5:
+            side_lidar = np.linalg.norm(point) if np.linalg.norm(point) < side_lidar else side_lidar
+        if abs(angle) < 5:
+            front_lidar.append(np.linalg.norm(point))
+    print(side_lidar)
+    # side_lidar /= 10
 
-    Kp = 0.5
+    Kp = 1
     correction = Kp*(0.5 - side_lidar)
-    basespeed= 6
-    while min(front_lidar)  < 0.5:
+    basespeed= 5
+    while len(front_lidar) != 0 and min(front_lidar)  < 0.5:
         front_lidar = []
-        for i in range(-10,10):
-            front_lidar.append(float(get_dist(lidar_points, i)))
+        for point in lidar_points:
+            angle = points_to_angles(point)
+            
+            if abs(angle) < 5:
+                front_lidar.append(np.linalg.norm(point))
+
         # turn_left()
         # print("wall in front")
         avoid_wall = True
         set_movement(bot_wheels,0,0,2)
-        time.sleep(0.2)
+        time.sleep(0.5)
         # time.sleep(2)
         lidar_points = get_lidar_points()
     else:
@@ -121,6 +152,16 @@ def wall_follow_right(lidar_points):
             return 
         set_movement(bot_wheels,basespeed,0,float(round(correction,2)))
 
+def points_to_angles(points):
+    """
+    points: Nx2 array of (x, y) coordinates
+    Returns: angles in degrees, clipped to [-120, 120]
+    """
+    angles = np.degrees(np.arctan2(points[1], points[0]))  # angle from x-axis
+    # Map angles to [-180, 180], then clip to [-120, 120]
+    angles = (angles + 180) % 360 - 180
+    angles = np.clip(angles, -120, 120)
+    return angles
 
 def get_line(start, end):
 
@@ -344,22 +385,22 @@ try:
 
     while sim.getSimulationState() != sim.simulation_stopped:
         # Get image from vision sensor
-        line_follower(vision_sensor_handle, bot_wheels)
         myData = sim.getBufferProperty(sim.handle_scene, "customData.lidar_points", {'noError' : True})
-        # myData = sim.getFloatArrayProperty(sim.handle_scene, "lidar", dict options = {})
         points = sim.unpackTable(myData)
-        # plot_lidar(points) 
         points = np.array(points, dtype=np.float32).reshape(-1, 3)
 
+        
+        line_follower(vision_sensor_handle, bot_wheels)
         wall_follow_right(points[:,:2])
+        plot_lidar(points)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
         robo_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
         # print(robo_pose[2])
         # target = BAS_target(grid,robo_pose[:2],5,3)
-        print("new target iteration")
+        # print("new target iteration")
         # nav_to_target(target)
-        print(avoid_wall)
+        # print(avoid_wall)
         time.sleep(0.1)  # Adjust loop timing as needed
 
 finally:
