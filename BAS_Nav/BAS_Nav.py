@@ -299,7 +299,7 @@ origin_x = grid_width // 2
 origin_y = grid_height // 2
 
 # Initialize grid/ Load grid from file if mapping is disabled
-grid = np.zeros((rows, cols), dtype=np.uint8) if mapping else np.load("gridMap.npy")
+grid = np.zeros((rows, cols), dtype=np.uint8) if mapping else np.load("gridMap2.npy")
 if not mapping:
     grid = fill_closed_regions(grid)  # Fill closed regions if mapping is enabled
     grid = inflate_obstacles(grid, thickness=4)  # Inflate obstacles if mapping is enabled
