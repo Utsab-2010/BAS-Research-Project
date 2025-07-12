@@ -72,9 +72,9 @@ def BAS_pid(error_l,error_r,D,d,old_pid):
 sim.startSimulation()
 time.sleep(0.5)
 
-Kp = 0.12
-Kd=0.01
-Ki = 0.001
+Kp = 5
+Kd=1
+Ki = 1
 integral = 0
 last_error = 0
 path = sim.getObject('/Path')
@@ -84,6 +84,7 @@ pathData = sim.unpackDoubleTable(sim.getBufferProperty(path, 'customData.PATH'))
 matrix = np.array(pathData, dtype=np.float64).reshape(-1, 7)
 traj = matrix[:,:2]
 robot_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
+target_handle = sim.getObject('/Target')
 
 # ============== Metrics =================================
 total_distance = 0
@@ -99,7 +100,7 @@ min_dev = 1000
 last_yaw = robot_pose[2]
 last_pos = np.array(robot_pose[:2])
 
-print(traj)
+# print(traj)
 counts = 0
 
 # ============== plotting ============================
@@ -115,13 +116,21 @@ pid_l = np.array([0, 0,0])
 pid_r = np.array([0, 0,0])
 error_l = 0
 error_r = 0
-d = 0.9
-D = 0.99
+d = 0.8
+D = 0.7
 b = np.random.randn(3)  # 3 for Kp, Ki, Kd
 b = b / np.linalg.norm(b)
+
+
+
+
+
 try:
     while sim.getSimulationState()!=sim.simulation_stopped:
         counts+=1
+
+        target = sim.getObjectPosition(target_handle,-1)
+        print(target)
         if counts%2:
             b = np.random.randn(3)  # 3 for Kp, Ki, Kd
             b = b / np.linalg.norm(b)
@@ -137,20 +146,22 @@ try:
 
         # robot_pos = sim.getObjectPosition(robot, -1)
         robot_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
+
+
         robot_angle = robot_pose[2]
         robot_xy = np.array(robot_pose[:2])  # Only x, y
+        dx = target[0] - robot_xy[0]
+        dy = target[1] - robot_xy[1]
+        local_x = dx * np.cos(robot_angle) + dy * np.sin(robot_angle)
+        local_y = -dx * np.sin(robot_angle) + dy * np.cos(robot_angle)
+
+        alpha = np.arctan2(local_y,local_x)
+        # print("Angle:",alpha)
+        error = -alpha 
 
         distances = np.linalg.norm(traj - robot_xy, axis=1)
         deviation = np.min(distances)
-        # if(counts%2):
-        #     x_data.append(counts)
-        #     y_data.append(deviation)
-        #     line.set_xdata(x_data)
-        #     line.set_ydata(y_data)
-        #     plt.draw()
-        #     plt.pause(0.001)
 
-        
         total_dev+=deviation
         max_dev = deviation if max_dev < deviation else max_dev
         min_dev = deviation if min_dev > deviation else min_dev
@@ -164,10 +175,10 @@ try:
         total_distance+=np.linalg.norm(robot_xy - last_pos)
         last_pos = robot_xy
 
-        error = left_val - right_val
+        # error = left_val - right_val
         integral += error
         derivative = error - last_error
-        correction = Kp * error + Ki * integral + Kd * derivative
+        correction = Kp * error 
         last_error = error
 
         if counts%2:
@@ -178,13 +189,14 @@ try:
             Kp,Kd,Ki = temp[0]
             d, D = temp[1:]
             
-        
-        set_movement(bot_wheels,6,0,correction)
+        # print("Error:", correction)
+        set_movement(bot_wheels,10,0,correction)
         time.sleep(0.01)
 
 finally:
     set_movement(bot_wheels, 0, 0, 0)  # Stop the robot
     print_metrics(total_distance,total_dev,time.time()-start_time,max_angle,min_angle,total_angle,max_dev,min_dev,counts)
+    print("Final BAS params:", Kp, Ki, Kd)
     time.sleep(0.5)  # Allow time for the robot to stop
     sim.stopSimulation()
 
