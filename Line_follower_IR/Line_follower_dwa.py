@@ -5,7 +5,7 @@ import time
 import math
 from scipy.ndimage import label,binary_dilation
 import matplotlib.pyplot as plt
-
+from DWA_Planner import DWAPlanner
 
 
 # Connect to CoppeliaSim
@@ -51,7 +51,6 @@ def plot_lidar(points):
 
     update_grid(robo_pose, xy)
     show_grid(robo_pose,grid)
-
 def get_line(start, end):
 
     x1, y1 = start
@@ -113,7 +112,6 @@ def update_grid(robot_pose, lidar_points, occupied_radius_cells=1):
                 if di**2 + dj**2 <= occupied_radius_cells**2:
                     if 0 <= ni < rows and 0 <= nj < cols:
                         grid[nj, ni] = 2
-
 def show_grid(robot_pose,grid):
     # Map values to colors: 0=unknown(128), 1=free(255), 2=occupied(0)
     global mapping
@@ -159,9 +157,6 @@ def read_ir(sensor_handle):
 
     return val  # Default to white
 
-
-
-
 def BAS_pid(error_l,error_r,D,d,old_pid):
     # Implement PID control here
     diff = error_r - error_l
@@ -171,6 +166,25 @@ def BAS_pid(error_l,error_r,D,d,old_pid):
         return old_pid + D*d*np.sign(diff) , new_D, new_d
     else:
         return old_pid, D, d
+def transform_lidar_to_world(points, x_robot, y_robot, theta):
+    # Take only x, y (first 2 columns)
+    xy = points[:, :2].astype(np.float32)  # shape (N, 2)
+
+    # Swap x and y (if sensor axes are flipped)
+    # xy = xy[:, [1, 0]]  # (y becomes x, x becomes y)
+    # xy[:, 1] = xy[:, 1]  # flip new x
+
+    # Extract relative coordinates
+    x_rel = xy[:, 0]
+    y_rel = xy[:, 1]
+
+    # Rotation + translation
+    x_world = x_robot + x_rel * np.cos(theta) - y_rel * np.sin(theta)
+    y_world = y_robot + x_rel * np.sin(theta) + y_rel * np.cos(theta)
+
+    return np.stack([x_world, y_world], axis=1)  # shape (N, 2)
+
+
 
 mapping = 0
 sim.startSimulation()
@@ -208,10 +222,10 @@ last_pos = np.array(robot_pose[:2])
 counts = 0
 
 # ============== plotting ============================
-fig, ax = plt.subplots()
-x_data = []
-y_data = []
-line, = ax.plot(x_data, y_data, 'r-')
+# fig, ax = plt.subplots()
+# x_data = []
+# y_data = []
+# line, = ax.plot(x_data, y_data, 'r-')
 # plt.ion()
 # plt.show()
 
@@ -239,25 +253,29 @@ origin_y = grid_height // 2
 grid = np.zeros((rows, cols), dtype=np.uint8) 
 
 start_idx = None
-
+planner = DWAPlanner()
+v=0.7
+w=0
 try:
     while sim.getSimulationState()!=sim.simulation_stopped:
         counts+=1
         myData = sim.getBufferProperty(sim.handle_scene, "customData.lidar_points", {'noError' : True})
         points = sim.unpackTable(myData)
         target = sim.getObjectPosition(target_handle,-1)
+        points = np.array(points, dtype=np.float32).reshape(-1, 3)
+
         if mapping:
             plot_lidar(points)
 
         # print(target)
-        if counts%2:
-            b = np.random.randn(3)  # 3 for Kp, Ki, Kd
-            b = b / np.linalg.norm(b)
-            pid_l = np.array([Kp, Kd, Ki]) + d*b
-            Kp,Kd,Ki = pid_l
-        else:
-            pid_r = np.array([Kp, Kd, Ki]) - d*b
-            Kp,Kd,Ki = pid_r
+        # if counts%2:
+        #     b = np.random.randn(3)  # 3 for Kp, Ki, Kd
+        #     b = b / np.linalg.norm(b)
+        #     pid_l = np.array([Kp, Kd, Ki]) + d*b
+        #     Kp,Kd,Ki = pid_l
+        # else:
+        #     pid_r = np.array([Kp, Kd, Ki]) - d*b
+        #     Kp,Kd,Ki = pid_r
             
         right_val = read_ir(vision_sensors[0])
         mid_val   = read_ir(vision_sensors[1])
@@ -265,7 +283,17 @@ try:
 
         # robot_pos = sim.getObjectPosition(robot, -1)
         robot_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
-
+        points_world = transform_lidar_to_world(points, robot_pose[0], robot_pose[1], robot_pose[2])
+        # # print(points_world)
+        # plt.figure(figsize=(6, 6))
+        # plt.plot(points_world[:,0], points_world[:,1], 'bo-')  # blue circles with lines
+        # plt.xlabel('X')
+        # plt.ylabel('Y')
+        # plt.title('2D Trajectory or Point Cloud')
+        # plt.grid(True)
+        # plt.axis('equal')  # Equal aspect ratio
+        # plt.show()
+        v,w = planner.plan(robot_pose,[v,w], target,points_world )
 
         robot_angle = robot_pose[2]
         robot_xy = np.array(robot_pose[:2])  # Only x, y
@@ -296,9 +324,7 @@ try:
         max_angle = angle_diff if angle_diff> max_angle else max_angle
         min_angle = angle_diff if angle_diff < min_angle else min_angle
         last_yaw = robot_angle
-        print(robot_angle)
-        if total_angle > np.pi:
-            break
+
         total_distance+=np.linalg.norm(robot_xy - last_pos)
         last_pos = robot_xy
 
@@ -308,20 +334,21 @@ try:
         correction = Kp * error 
         last_error = error
 
-        if counts%2:
-            error_l = deviation
-        else:
-            error_r = deviation
-            temp = BAS_pid(error_l,error_r,D,d,np.array([Kp, Ki, Kd]))
-            Kp,Kd,Ki = temp[0]
-            d, D = temp[1:]
+        # if counts%2:
+        #     error_l = deviation
+        # else:
+        #     error_r = deviation
+        #     temp = BAS_pid(error_l,error_r,D,d,np.array([Kp, Ki, Kd]))
+        #     Kp,Kd,Ki = temp[0]
+        #     d, D = temp[1:]
             
         # print("Error:", correction)
-        set_movement(bot_wheels,14,0,correction)
+        set_movement(bot_wheels,v/0.06189,0,-w/0.194636)
         time.sleep(0.01)
 
 finally:
-    # lin speed scale = 0.06189 , ang speed scale = 0.194636
+        # lin speed scale = 0.06189 , ang speed scale = 0.194636
+
     set_movement(bot_wheels, 0, 0, 0)  # Stop the robot
     print_metrics(total_distance,total_dev,time.time()-start_time,max_angle,min_angle,total_angle,max_dev,min_dev,counts)
     print("Final BAS params:", Kp, Ki, Kd)
