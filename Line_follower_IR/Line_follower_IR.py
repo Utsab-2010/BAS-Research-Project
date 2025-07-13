@@ -1,12 +1,7 @@
 import numpy as np
-import cv2
 from coppeliasim_zmqremoteapi_client import RemoteAPIClient
 import time
-import math
-from scipy.ndimage import label,binary_dilation
 import matplotlib.pyplot as plt
-
-
 
 # Connect to CoppeliaSim
 client = RemoteAPIClient()
@@ -73,14 +68,16 @@ sim.startSimulation()
 time.sleep(0.5)
 
 Kp = 0.12
-Kd=0.01
-Ki = 0.001
+Kd=0.0006
+Ki = 0.002
 integral = 0
 last_error = 0
 path = sim.getObject('/Path')
 robot = sim.getObject('/youBot')
 old_robot_xy = None
 pathData = sim.unpackDoubleTable(sim.getBufferProperty(path, 'customData.PATH'))
+_,  totalLength = sim.getPathLengths(pathData, 7)
+# print(totalLength)
 matrix = np.array(pathData, dtype=np.float64).reshape(-1, 7)
 traj = matrix[:,:2]
 robot_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
@@ -99,7 +96,7 @@ min_dev = 1000
 last_yaw = robot_pose[2]
 last_pos = np.array(robot_pose[:2])
 
-print(traj)
+# print(traj)
 counts = 0
 
 # ============== plotting ============================
@@ -119,17 +116,19 @@ d = 0.9
 D = 0.99
 b = np.random.randn(3)  # 3 for Kp, Ki, Kd
 b = b / np.linalg.norm(b)
+# start_idx = np.argmin(distances)
+
 try:
     while sim.getSimulationState()!=sim.simulation_stopped:
         counts+=1
-        if counts%2:
-            b = np.random.randn(3)  # 3 for Kp, Ki, Kd
-            b = b / np.linalg.norm(b)
-            pid_l = np.array([Kp, Kd, Ki]) + d*b
-            Kp,Kd,Ki = pid_l
-        else:
-            pid_r = np.array([Kp, Kd, Ki]) - d*b
-            Kp,Kd,Ki = pid_r
+        # if counts%2:
+        #     b = np.random.randn(3)  # 3 for Kp, Ki, Kd
+        #     b = b / np.linalg.norm(b)
+        #     pid_l = np.array([Kp, Kd, Ki]) + d*b
+        #     Kp,Kd,Ki = pid_l
+        # else:
+        #     pid_r = np.array([Kp, Kd, Ki]) - d*b
+        #     Kp,Kd,Ki = pid_r
             
         right_val = read_ir(vision_sensors[0])
         mid_val   = read_ir(vision_sensors[1])
@@ -154,8 +153,8 @@ try:
         total_dev+=deviation
         max_dev = deviation if max_dev < deviation else max_dev
         min_dev = deviation if min_dev > deviation else min_dev
-
-        angle_diff = abs(robot_angle - last_yaw)
+        diff = (robot_angle - last_yaw + np.pi) % (2 * np.pi) - np.pi
+        angle_diff = abs(diff)
         total_angle+=angle_diff
         max_angle = angle_diff if angle_diff> max_angle else max_angle
         min_angle = angle_diff if angle_diff < min_angle else min_angle
@@ -170,17 +169,24 @@ try:
         correction = Kp * error + Ki * integral + Kd * derivative
         last_error = error
 
-        if counts%2:
-            error_l = deviation
-        else:
-            error_r = deviation
-            temp = BAS_pid(error_l,error_r,D,d,np.array([Kp, Ki, Kd]))
-            Kp,Kd,Ki = temp[0]
-            d, D = temp[1:]
+        # if counts == 1:
+        #     start_idx = np.argmin(distances)
+        if total_distance> 1.05*totalLength:
+            break
+        if deviation > 1:
+            print("Failed")
+            break
+       # if counts%2:
+        #     error_l = deviation
+        # else:
+        #     error_r = deviation
+        #     temp = BAS_pid(error_l,error_r,D,d,np.array([Kp, Ki, Kd]))
+        #     Kp,Kd,Ki = temp[0]
+        #     d, D = temp[1:]
             
         
         set_movement(bot_wheels,6,0,correction)
-        time.sleep(0.01)
+        time.sleep(0.002)
 
 finally:
     set_movement(bot_wheels, 0, 0, 0)  # Stop the robot

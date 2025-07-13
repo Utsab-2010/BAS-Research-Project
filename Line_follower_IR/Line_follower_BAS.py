@@ -5,7 +5,7 @@ import time
 import math
 from scipy.ndimage import label,binary_dilation
 import matplotlib.pyplot as plt
-
+import csv,os
 
 
 # Connect to CoppeliaSim
@@ -36,7 +36,44 @@ def print_metrics(total_distance,total_dev,total_time,max_angle,min_angle,total_
     print("Average Deviation:", total_dev/N)
     print("Maximum Deviation:", max_dev)
     print("Minimum Deviation:", min_dev)
+
+# Add this function after the existing function definitions
+def append_metrics_to_csv(filename, total_distance, total_dev, total_time, max_angle, min_angle, total_angle, max_dev, min_dev, counts, final_kp, final_ki, final_kd):
+    """Append metrics to CSV file. Creates file with headers if it doesn't exist."""
+    file_exists = os.path.isfile(filename)
     
+    with open(filename, 'a', newline='') as csvfile:
+        fieldnames = ['Total_Distance', 'Total_Time', 'Average_Speed', 'Max_Angle', 'Min_Angle', 
+                     'Avg_Angle', 'Average_Deviation', 'Max_Deviation', 'Min_Deviation', 
+                     'Total_Deviation', 'Loop_Count', 'Final_Kp', 'Final_Ki', 'Final_Kd']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        
+        # Write header if file is new
+        if not file_exists:
+            writer.writeheader()
+        
+        # Calculate derived metrics
+        avg_speed = total_distance / total_time if total_time > 0 else 0
+        avg_angle = total_angle / counts if counts > 0 else 0
+        avg_deviation = total_dev / counts if counts > 0 else 0
+        
+        # Write the metrics row
+        writer.writerow({
+            'Total_Distance': total_distance,
+            'Total_Time': total_time,
+            'Average_Speed': avg_speed,
+            'Max_Angle': max_angle,
+            'Min_Angle': min_angle,
+            'Avg_Angle': avg_angle,
+            'Max_Deviation': max_dev,
+            'Min_Deviation': min_dev,
+            'Average_Deviation': avg_deviation,
+            'Total_Deviation': total_dev,
+            'Final_Kp': final_kp,
+            'Final_Ki': final_ki,
+            'Final_Kd': final_kd
+        })
+
 def world_to_grid(x, y):
     """Convert world (x, y) to grid indices (i, j)."""
     j = int((origin_y - y) / cell_size)
@@ -176,9 +213,9 @@ mapping = 0
 sim.startSimulation()
 time.sleep(0.5)
 
-Kp = 5
+Kp = 12
 Kd=1
-Ki = 1
+Ki = 4
 integral = 0
 last_error = 0
 path = sim.getObject('/Path')
@@ -195,7 +232,7 @@ total_distance = 0
 start_time = time.time()
 total_angle = 0
 max_angle = 0
-min_angle = 0
+min_angle = 10000
 
 total_dev = 0
 max_dev = 0
@@ -239,7 +276,8 @@ origin_y = grid_height // 2
 grid = np.zeros((rows, cols), dtype=np.uint8) 
 
 start_idx = None
-
+measurement_no = 0
+use_bas = False
 try:
     while sim.getSimulationState()!=sim.simulation_stopped:
         counts+=1
@@ -250,14 +288,15 @@ try:
             plot_lidar(points)
 
         # print(target)
-        if counts%2:
-            b = np.random.randn(3)  # 3 for Kp, Ki, Kd
-            b = b / np.linalg.norm(b)
-            pid_l = np.array([Kp, Kd, Ki]) + d*b
-            Kp,Kd,Ki = pid_l
-        else:
-            pid_r = np.array([Kp, Kd, Ki]) - d*b
-            Kp,Kd,Ki = pid_r
+        if use_bas:
+            if counts%2:
+                b = np.random.randn(3)  # 3 for Kp, Ki, Kd
+                b = b / np.linalg.norm(b)
+                pid_l = np.array([Kp, Kd, Ki]) + d*b
+                Kp,Kd,Ki = pid_l
+            else:
+                pid_r = np.array([Kp, Kd, Ki]) - d*b
+                Kp,Kd,Ki = pid_r
             
         right_val = read_ir(vision_sensors[0])
         mid_val   = read_ir(vision_sensors[1])
@@ -284,40 +323,58 @@ try:
             start_idx = np.argmin(distances)
         elif np.argmin(distances) == start_idx and counts > 20:
             print("Loop completed!")
-            break
+            # Calculate final time and append metrics to CSV
+            final_time = time.time() - start_time
+            csv_filename = "line_follower_metrics.csv"  # You can make this user-configurable
+            append_metrics_to_csv(csv_filename, total_distance, total_dev, final_time, 
+                                max_angle, min_angle, total_angle, max_dev, min_dev, 
+                                counts, Kp, Ki, Kd)
+            # print(f"Metrics appended to {csv_filename}")
+            total_distance = 0
+            start_time = time.time()
+            total_angle = 0
+            max_angle = 0
+            min_angle = 10000
+
+            total_dev = 0
+            max_dev = 0
+            min_dev = 1000
+            counts = 0
+            if measurement_no >=10:
+                break
+            else:
+                measurement_no+=1
+                continue
+        
+        
         total_dev+=deviation
         max_dev = deviation if max_dev < deviation else max_dev
         min_dev = deviation if min_dev > deviation else min_dev
 
         diff = (robot_angle - last_yaw + np.pi) % (2 * np.pi) - np.pi
         angle_diff = abs(diff)
-        # print("Angle diff:", angle_diff)
         total_angle+=angle_diff
         max_angle = angle_diff if angle_diff> max_angle else max_angle
         min_angle = angle_diff if angle_diff < min_angle else min_angle
         last_yaw = robot_angle
-        print(robot_angle)
-        if total_angle > np.pi:
-            break
+
         total_distance+=np.linalg.norm(robot_xy - last_pos)
         last_pos = robot_xy
 
-        # error = left_val - right_val
         integral += error
         derivative = error - last_error
         correction = Kp * error 
         last_error = error
-
-        if counts%2:
-            error_l = deviation
-        else:
-            error_r = deviation
-            temp = BAS_pid(error_l,error_r,D,d,np.array([Kp, Ki, Kd]))
-            Kp,Kd,Ki = temp[0]
-            d, D = temp[1:]
+        if use_bas:
+            if counts%2:
+                error_l = deviation
+            else:
+                error_r = deviation
+                temp = BAS_pid(error_l,error_r,D,d,np.array([Kp, Ki, Kd]))
+                Kp,Kd,Ki = temp[0]
+                d, D = temp[1:]
             
-        # print("Error:", correction)
-        set_movement(bot_wheels,14,0,correction)
+        set_movement(bot_wheels,16,0,correction)
         time.sleep(0.01)
 
 finally:
