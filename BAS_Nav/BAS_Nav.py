@@ -285,7 +285,7 @@ def inflate_obstacles(grid, thickness=2):
 
 
 # =========================Main Code Starts Here=========================
-mapping = False
+mapping = True
 # Envrionment setup
 k = 1
 grid_width = 20*k    # meters

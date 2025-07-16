@@ -213,9 +213,9 @@ mapping = 0
 sim.startSimulation()
 time.sleep(0.5)
 
-Kp = 12
+Kp = 18
 Kd=1
-Ki = 4
+Ki = 8
 integral = 0
 last_error = 0
 path = sim.getObject('/Path')
@@ -277,7 +277,7 @@ grid = np.zeros((rows, cols), dtype=np.uint8)
 
 start_idx = None
 measurement_no = 0
-use_bas = False
+use_bas = True
 try:
     while sim.getSimulationState()!=sim.simulation_stopped:
         counts+=1

@@ -2,17 +2,25 @@ import numpy as np
 from coppeliasim_zmqremoteapi_client import RemoteAPIClient
 import time
 import matplotlib.pyplot as plt
-
+import csv,os
 # Connect to CoppeliaSim
 client = RemoteAPIClient()
 sim = client.require('sim')
 
 # Get handles
 vision_sensors = [
-    sim.getObject('/youBot/right_ir'),
-    sim.getObject('/youBot/mid_ir'),
-    sim.getObject('/youBot/left_ir')
+    sim.getObject('/youBot/IR_R4'),
+    sim.getObject('/youBot/IR_R3'),
+    sim.getObject('/youBot/IR_R2'),
+    sim.getObject('/youBot/IR_R1'),
+    sim.getObject('/youBot/IR_M'),
+    sim.getObject('/youBot/IR_L1'),
+    sim.getObject('/youBot/IR_L2'),
+    sim.getObject('/youBot/IR_L3'),
+    sim.getObject('/youBot/IR_L4')
+    
 ]
+sensor_weights = [-4,-3,-2,-1,0,1,2,3,4]
 bot_wheels = [
     sim.getObject('/youBot/rollingJoint_fl'),
     sim.getObject('/youBot/rollingJoint_rl'),
@@ -67,7 +75,7 @@ def BAS_pid(error_l,error_r,D,d,old_pid):
 sim.startSimulation()
 time.sleep(0.5)
 
-Kp = 0.12
+Kp = 0.01
 Kd=0.0006
 Ki = 0.002
 integral = 0
@@ -118,6 +126,13 @@ b = np.random.randn(3)  # 3 for Kp, Ki, Kd
 b = b / np.linalg.norm(b)
 # start_idx = np.argmin(distances)
 
+def get_error(vision_sensors,sensor_weights):
+    error =0
+    for i in range(len(vision_sensors)):
+        val = read_ir(vision_sensors[i])
+        error += val*sensor_weights[i]
+    return error   
+
 try:
     while sim.getSimulationState()!=sim.simulation_stopped:
         counts+=1
@@ -130,9 +145,7 @@ try:
         #     pid_r = np.array([Kp, Kd, Ki]) - d*b
         #     Kp,Kd,Ki = pid_r
             
-        right_val = read_ir(vision_sensors[0])
-        mid_val   = read_ir(vision_sensors[1])
-        left_val  = read_ir(vision_sensors[2])
+        
 
         # robot_pos = sim.getObjectPosition(robot, -1)
         robot_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
@@ -148,7 +161,10 @@ try:
         #     line.set_ydata(y_data)
         #     plt.draw()
         #     plt.pause(0.001)
-
+        # if total_distance%3 <0.1:
+        #     print(robot_pose)
+        #     with open('robot_pose.csv', 'a') as f:
+        #         f.write(f"{robot_pose[0]},{robot_pose[1]},{robot_pose[2]}\n")
         
         total_dev+=deviation
         max_dev = deviation if max_dev < deviation else max_dev
@@ -163,7 +179,7 @@ try:
         total_distance+=np.linalg.norm(robot_xy - last_pos)
         last_pos = robot_xy
 
-        error = left_val - right_val
+        error = get_error(vision_sensors, sensor_weights)
         integral += error
         derivative = error - last_error
         correction = Kp * error + Ki * integral + Kd * derivative
