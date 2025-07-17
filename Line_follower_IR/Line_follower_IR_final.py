@@ -1,15 +1,12 @@
-import numpy as np
-from coppeliasim_zmqremoteapi_client import RemoteAPIClient
 import time
 import matplotlib.pyplot as plt
+import numpy as np
 import csv,os
 import cv2
 import keyboard
-from scipy.ndimage import label,binary_dilation
-from skimage.draw import line as skline  # for line-of-sight checking
-
 import heapq
-
+from coppeliasim_zmqremoteapi_client import RemoteAPIClient
+from scipy.ndimage import label,binary_dilation
 
 # Connect to CoppeliaSim
 client = RemoteAPIClient()
