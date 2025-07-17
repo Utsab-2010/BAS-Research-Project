@@ -45,7 +45,6 @@ def print_metrics(total_distance,total_dev,total_time,max_angle,min_angle,total_
     print("Maximum Deviation:", max_dev)
     print("Minimum Deviation:", min_dev)
     
-
 def set_movement(bot_wheels,FB_vel,LR_vel,rot):
     sim.setJointTargetVelocity(bot_wheels[0],-FB_vel-LR_vel-rot) 
     sim.setJointTargetVelocity(bot_wheels[1],-FB_vel+LR_vel-rot) 
@@ -74,7 +73,7 @@ def grid_to_world(i, j):
     x = i * cell_size - origin_x
     y = -j * cell_size + origin_y
     return x, y
-def plot_lidar(points,waypoints=None):
+def plot_lidar(points,waypoints=None,target=None):
     
     xy = points[:, :2]  # shape (N, 2)
     xy = xy[:,[1,0]]
@@ -84,7 +83,7 @@ def plot_lidar(points,waypoints=None):
     if mapping:
         update_grid(robo_pose, xy,2)
         
-    show_grid(robo_pose,grid,waypoints)
+    show_grid(robo_pose,grid,waypoints,target)
 
 def get_line(start, end):
 
@@ -150,7 +149,7 @@ def update_grid(robot_pose, lidar_points, occupied_radius_cells=1):
                     if 0 <= ni < rows and 0 <= nj < cols:
                         grid[nj, ni] = 1
 
-def show_grid(robot_pose,grid,waypoints=None):
+def show_grid(robot_pose,grid,waypoints=None,target=None):
     # Map values to colors: 0=unknown(128), 1=free(255), 2=occupied(0)
     global mapping,slam
     grid = grid if mapping else grid
@@ -164,7 +163,7 @@ def show_grid(robot_pose,grid,waypoints=None):
     img_color = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
     # print("Target:", target)
-    global testing_target
+    # global testing_target
 
     # fi,fj = world_to_grid(final_goal[0], final_goal[1])
     # i,j = world_to_grid(target[0],target[1])  
@@ -176,12 +175,15 @@ def show_grid(robot_pose,grid,waypoints=None):
         #     img_color, (fi, fj), color=(255,0,0), markerType=cv2.MARKER_TILTED_CROSS,
         #     markerSize=10, thickness=1, line_type=cv2.LINE_AA
         # )
-    cv2.circle(img_color, (rj,ri), radius=5, color=(0,255, 0), thickness=-1) 
-    cv2.circle(img_color, (testing_target[1],testing_target[0]), radius=3, color=(0,0, 200), thickness=-1)   
+    cv2.circle(img_color, (ri,rj), radius=5, color=(0,255, 0), thickness=-1) 
+    if target is not None:
+        ti,tj = world_to_grid(target[0], target[1])
+        cv2.circle(img_color, (ti,tj), radius=3, color=(0, 0, 255), thickness=-1)
+    # cv2.circle(img_color, (testing_target[1],testing_target[0]), radius=3, color=(0,0, 200), thickness=-1)   
     if waypoints is not None:
         for coord in waypoints:  # coords_list is your list of (x, y) tuples
-            y,x = coord
-            cv2.circle(img_color, (int(x), int(y)), radius=1, color=(0, 0, 255), thickness=-1)
+            x,y = coord
+            cv2.circle(img_color, (int(y), int(x)), radius=1, color=(0, 0, 255), thickness=-1)
     cv2.imshow('Occupancy Grid', img_color)
     cv2.waitKey(1)
 
@@ -195,61 +197,6 @@ def BAS_pid(error_l,error_r,D,d,old_pid):
     else:
         return old_pid, D, d
 
-
-sim.startSimulation()
-time.sleep(0.5)
-
-Kp = 0.01
-Kd=0.0006
-Ki = 0.002
-integral = 0
-last_error = 0
-path = sim.getObject('/Path')
-robot = sim.getObject('/youBot')
-old_robot_xy = None
-pathData = sim.unpackDoubleTable(sim.getBufferProperty(path, 'customData.PATH'))
-_,  totalLength = sim.getPathLengths(pathData, 7)
-# print(totalLength)
-matrix = np.array(pathData, dtype=np.float64).reshape(-1, 7)
-traj = matrix[:,:2]
-robot_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
-
-# ============== Metrics =================================
-total_distance = 0
-start_time = time.time()
-total_angle = 0
-max_angle = 0
-min_angle = 0
-
-total_dev = 0
-max_dev = 0
-min_dev = 1000
-
-last_yaw = robot_pose[2]
-last_pos = np.array(robot_pose[:2])
-
-# print(traj)
-counts = 0
-
-# ============== plotting ============================
-fig, ax = plt.subplots()
-x_data = []
-y_data = []
-line, = ax.plot(x_data, y_data, 'r-')
-# plt.ion()
-# plt.show()
-
-# ================ BAS PID ============================
-pid_l = np.array([0, 0,0])
-pid_r = np.array([0, 0,0])
-error_l = 0
-error_r = 0
-d = 0.9
-D = 0.99
-b = np.random.randn(3)  # 3 for Kp, Ki, Kd
-b = b / np.linalg.norm(b)
-# start_idx = np.argmin(distances)
-
 def get_error(vision_sensors,sensor_weights):
     error =0
     for i in range(len(vision_sensors)):
@@ -258,7 +205,7 @@ def get_error(vision_sensors,sensor_weights):
     return error   
 
 def fill_closed_regions(grid):
-    mask = (grid == 0)
+    mask = (grid == -1)
     labeled, num_features = label(mask)
     # Find labels that touch the border
     border_labels = set(np.unique(np.concatenate([
@@ -267,12 +214,12 @@ def fill_closed_regions(grid):
     # Fill all regions not connected to the border
     for region in range(1, num_features + 1):
         if region not in border_labels:
-            grid[labeled == region] = 2
+            grid[labeled == region] = 1
     return grid
 
 def inflate_obstacles(grid, thickness=2):
     # Create a mask for obstacle cells (value 2)
-    obstacle_mask = (grid == 2)
+    obstacle_mask = (grid == 1)
     # Create a structuring element (disk or square)
     struct = np.ones((2*thickness+1, 2*thickness+1), dtype=bool)
     # Dilate the obstacle mask
@@ -280,12 +227,12 @@ def inflate_obstacles(grid, thickness=2):
     # Find the new boundary (cells that are in inflated but not in original obstacle)
     boundary = inflated & ~obstacle_mask
     # Set these boundary cells to 1.5 (extended boundary)
-    grid[boundary] = 2
+    grid[boundary] = 1
     return grid
 def point_in_obs(grid,pose):
     x, y = pose[:2]
     i, j = world_to_grid(x, y)
-    return grid[i, j] == 2
+    return grid[i, j] == 1
     # pass
 
 def find_target(grid,poses_on_line,robot_pose):
@@ -331,8 +278,11 @@ def count_adjacent_ones(grid, x, y):
     return count
 
 def astar(grid, start, goal):
-    start = world_to_grid(start[0], start[1])
-    goal = world_to_grid(goal[0], goal[1])
+    si,sj = world_to_grid(start[0], start[1])
+    gi,gj = world_to_grid(goal[0], goal[1])
+    start = (sj,si)
+    goal = (gj, gi)
+    # print("start:", start, "goal:", goal)
     print("start:", start, "goal:", goal)
     rows, cols = grid.shape
     open_set = []
@@ -347,17 +297,14 @@ def astar(grid, start, goal):
         if current in visited:
             continue
         visited.add(current)
-        # print("0s:", np.sum(grid == 0), "1s:", np.sum(grid == 1))
-        # print("current:", current)
+
         for dx, dy in [(-1,0),(1,0),(0,-1),(0,1)]:
             nx, ny = current[0] + dx, current[1] + dy
-            
-            # print("gridvalue", grid[nx,ny] if 0 <= nx < rows and 0 <= ny < cols else "out of bounds")
             if 0 <= nx < rows and 0 <= ny < cols and grid[nx, ny] == 0:
                 neighbor = (nx, ny)
                 if neighbor not in visited:
                     new_cost = cost + np.hypot(dx, dy)  
-                    priority = new_cost + heuristic(neighbor, goal) + 10*count_adjacent_ones(grid, nx, ny)  # Add heuristic cost to priority queue
+                    priority = new_cost + heuristic(neighbor, goal) + count_adjacent_ones(grid, nx, ny)  # Add heuristic cost to priority queue
                     heapq.heappush(open_set, (priority, new_cost, neighbor, path + [neighbor]))
     return []
 
@@ -368,7 +315,6 @@ def subsample_path(path, step=3):
 def world_to_bot_frame(global_point, bot_position, bot_theta):
     dx = global_point[0] - bot_position[0]
     dy = global_point[1] - bot_position[1]
-    # Step 2: Rotate by -theta
     x_local =  np.cos(-bot_theta) * dx - np.sin(-bot_theta) * dy
     y_local =  np.sin(-bot_theta) * dx + np.cos(-bot_theta) * dy
     return np.array([x_local, y_local])
@@ -376,8 +322,7 @@ def world_to_bot_frame(global_point, bot_position, bot_theta):
 def follow_till_line(waypoints,target):
     for point in waypoints:
         
-        temp_goal = grid_to_world(point[0],point[1])
-        # reached = False
+        temp_goal = grid_to_world(point[1],point[0])
         while True:
             robot_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
             local = world_to_bot_frame(temp_goal, robot_pose[:2], robot_pose[2])
@@ -387,7 +332,7 @@ def follow_till_line(waypoints,target):
             alpha = np.atan2(local[1],local[0]) if local[0] != 0 else np.pi/2
 
             if abs(alpha) >0.2:
-                rot = - 3*alpha
+                rot = - 1*alpha
                 set_movement(bot_wheels, 0,0, rot)  
             else:
                 set_movement(bot_wheels, 20*dist, 0, 0)
@@ -397,14 +342,64 @@ def follow_till_line(waypoints,target):
     # while True:
     #     robot_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")    
     #     print("target reached", target)
-    #     delta = target[2] - robot_pose[2]
-    #     print("delta", delta)
-    #     if abs(delta) < 0.1:
-    #         print("Reached line again.")
+    #     dist = np.linalg.norm(np.array(target[:2]) - np.array(robot_pose[:2]))
+    #     if dist < 0.1:
+    #         while True:
+    #             robot_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
+
+    #             delta = target[2] - robot_pose[2]
+    #     # print("delta", delta)
+    #             if abs(delta) < 0.5:
+    #                 print("Reached line again.")
+    #                 break
+    #             set_movement(bot_wheels, 0, 0, float(-delta))
     #         break
-    #     set_movement(bot_wheels, 0, 0, float(-delta))
+        
 
 
+sim.startSimulation()
+time.sleep(0.5)
+
+Kp = 0.01
+Kd=0.0006
+Ki = 0.002
+integral = 0
+last_error = 0
+
+path = sim.getObject('/Path')
+robot = sim.getObject('/youBot')
+pathData = sim.unpackDoubleTable(sim.getBufferProperty(path, 'customData.PATH'))
+_,  totalLength = sim.getPathLengths(pathData, 7)
+
+robot_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
+
+matrix = np.array(pathData, dtype=np.float64).reshape(-1, 7)
+traj = matrix[:,:2]
+
+# ============== Metrics =================================
+old_robot_xy = None
+total_distance = 0
+start_time = time.time()
+total_angle = 0
+max_angle = 0
+min_angle = 0
+total_dev = 0
+max_dev = 0
+min_dev = 1000
+last_yaw = robot_pose[2]
+last_pos = np.array(robot_pose[:2])
+counts = 0
+
+# ================ BAS PID ============================
+pid_l = np.array([0, 0,0])
+pid_r = np.array([0, 0,0])
+error_l = 0
+error_r = 0
+d = 0.9
+D = 0.99
+b = np.random.randn(3)  # 3 for Kp, Ki, Kd
+b = b / np.linalg.norm(b)
+# start_idx = np.argmin(distances)
 
 # ============== Mapping ============================
 k = 1
@@ -417,29 +412,33 @@ rows = int(grid_height / cell_size)
 # Set grid origin (world coordinates of grid[0,0])
 origin_x = grid_width // 2
 origin_y = grid_height // 2
+
+# ============== Flags ============================
 mapping = False
-teleop = False
+teleop = mapping
 teleop_lin_vel = 0
 teleop_rot_vel = 0
 slam = False
-grid = np.full((rows, cols),-1, dtype=np.int8) if mapping else np.load('gridMap_final.npy')
-testing_target = (119, 194)
+grid = np.full((rows, cols),-1, dtype=np.int8) if mapping else np.load('grid3.npy')
+# testing_target = (119, 194)
 
 
 if not mapping:
     grid = fill_closed_regions(grid)  # Fill closed regions if mapping is enabled
-    grid = inflate_obstacles(grid, thickness=7)  # Inflate obstacles if mapping is enabled
-    new_grid = np.zeros((rows, cols), dtype=np.uint8)
-    new_grid[grid==0] = 1
-    new_grid[grid==2] = 1
-    grid = new_grid
+    grid = inflate_obstacles(grid, thickness=2)  # Inflate obstacles if mapping is enabled
+    # new_grid = np.zeros((rows, cols), dtype=np.uint8)
+    # new_grid[grid==1] = 1
+    # new_grid[grid==-1] = 1
+    grid[grid==-1] = 1
 
-    
+# ============== Poses on the Main Line ============================    
 poses_on_line = []
 with open('robot_pose.csv', 'r') as file:
     reader = csv.reader(file)
     for row in reader:
         poses_on_line.append(np.array(row, dtype=np.float32))
+
+# ============== Main Loop ============================
 
 try:
     while sim.getSimulationState()!=sim.simulation_stopped:
@@ -482,7 +481,7 @@ try:
         rel_lidar = front_lidar 
         front_lidar_dist = np.linalg.norm(rel_lidar, axis=1)
 
-        if np.min(front_lidar_dist < 0.99):
+        if np.min(front_lidar_dist) < 1.0:
             print("Obstacle detected!")
             # if slam:
             #     continue
@@ -493,8 +492,8 @@ try:
             # print(grid[testing_target[0], testing_target[1]])
             target = find_target(grid,poses_on_line,robot_pose)
             path = astar(grid, robot_xy, target[:2])
-            waypoints = subsample_path(path, step=12)
-            plot_lidar(points,waypoints)
+            waypoints = subsample_path(path, step=16)
+            plot_lidar(points,waypoints,target)
             follow_till_line(waypoints,target)
             
             # print(waypoints)
