@@ -202,7 +202,7 @@ def BAS_pid(error_l,error_r,D,d,old_pid):
 sim.startSimulation()
 time.sleep(0.5)
 
-Kp = 0.01
+Kp = 0.001
 Kd=0.0006
 Ki = 0.002
 integral = 0
