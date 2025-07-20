@@ -202,7 +202,7 @@ def BAS_pid(error_l,error_r,D,d,old_pid):
 sim.startSimulation()
 time.sleep(0.5)
 
-Kp = 0.001
+Kp = 0.01
 Kd=0.0006
 Ki = 0.002
 integral = 0
@@ -438,11 +438,11 @@ if not mapping:
     grid = new_grid
 
     
-poses_on_line = []
-with open('robot_pose.csv', 'r') as file:
-    reader = csv.reader(file)
-    for row in reader:
-        poses_on_line.append(np.array(row, dtype=np.float32))
+# poses_on_line = []
+# with open('robot_pose.csv', 'r') as file:
+#     reader = csv.reader(file)
+#     for row in reader:
+#         poses_on_line.append(np.array(row, dtype=np.float32))
 
 try:
     while sim.getSimulationState()!=sim.simulation_stopped:
@@ -469,10 +469,10 @@ try:
         # else:
         #     pid_r = np.array([Kp, Kd, Ki]) - d*b
         #     Kp,Kd,Ki = pid_r
-        myData = sim.getBufferProperty(sim.handle_scene, "customData.lidar_points", {'noError' : True})
-        points = sim.unpackTable(myData)
-        points = np.array(points, dtype=np.float32).reshape(-1, 3)
-        plot_lidar(points)
+        # myData = sim.getBufferProperty(sim.handle_scene, "customData.lidar_points", {'noError' : True})
+        # points = sim.unpackTable(myData)
+        # points = np.array(points, dtype=np.float32).reshape(-1, 3)
+        # plot_lidar(points)
 
         if teleop:
             time.sleep(0.05)
@@ -481,35 +481,35 @@ try:
         robot_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
         robot_angle = robot_pose[2]
         robot_xy = np.array(robot_pose[:2])  # Only x, y
-        front_lidar = points[len(points)//2-30:len(points)//2+30,:2]
-        rel_lidar = front_lidar 
-        front_lidar_dist = np.linalg.norm(rel_lidar, axis=1)
+        # front_lidar = points[len(points)//2-30:len(points)//2+30,:2]
+        # rel_lidar = front_lidar 
+        # front_lidar_dist = np.linalg.norm(rel_lidar, axis=1)
 
-        if np.min(front_lidar_dist < 0.99):
-            print("Obstacle detected!")
-            # if slam:
-            #     continue
-            set_movement(bot_wheels,0,0,0)
-            slam = True
-            # print("original 0s:", np.sum(grid == 0), "1s:", np.sum(grid == 1))
-            # print(testing_target)
-            # print(grid[testing_target[0], testing_target[1]])
-            target = find_target(grid,poses_on_line,robot_pose)
-            path = astar(grid, robot_xy, target[:2])
-            waypoints = subsample_path(path, step=12)
-            plot_lidar(points,waypoints)
-            follow_till_line(waypoints,target)
+        # if np.min(front_lidar_dist < 0.99):
+        #     print("Obstacle detected!")
+        #     # if slam:
+        #     #     continue
+        #     set_movement(bot_wheels,0,0,0)
+        #     slam = True
+        #     # print("original 0s:", np.sum(grid == 0), "1s:", np.sum(grid == 1))
+        #     # print(testing_target)
+        #     # print(grid[testing_target[0], testing_target[1]])
+        #     target = find_target(grid,poses_on_line,robot_pose)
+        #     path = astar(grid, robot_xy, target[:2])
+        #     waypoints = subsample_path(path, step=12)
+        #     plot_lidar(points,waypoints)
+        #     follow_till_line(waypoints,target)
             
-            # print(waypoints)
+        #     # print(waypoints)
             
         
         distances = np.linalg.norm(traj - robot_xy, axis=1)
         deviation = np.min(distances)
 
-        # if total_distance%3 <0.1:
-        #     print(robot_pose)
-        #     with open('robot_pose.csv', 'a') as f:
-        #         f.write(f"{robot_pose[0]},{robot_pose[1]},{robot_pose[2]}\n")
+        if total_distance%1.5 <0.1:
+            print(robot_pose)
+            with open('robot_pose.csv', 'a') as f:
+                f.write(f"{robot_pose[0]},{robot_pose[1]},{robot_pose[2]}\n")
         
         total_dev+=deviation
         max_dev = deviation if max_dev < deviation else max_dev

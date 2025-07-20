@@ -246,11 +246,11 @@ def find_target(grid,poses_on_line,robot_pose):
         # transform pose to robot frame
         x_local = np.cos(robot_pose[2]) * diff[0] + np.sin(robot_pose[2]) * diff[1]
         y_local = -np.sin(robot_pose[2]) * diff[0] + np.cos(robot_pose[2]) * diff[1]
-
+        pj,pi = world_to_grid(pose[0], pose[1])
         # Check if pose is valid (not out of bounds and not in obstacle
         alpha = np.arctan2(y_local, x_local)
         # print(alpha)
-        if distance < min_distance and distance >1 and not point_in_obs(grid, pose) and abs(alpha)<np.pi/3:
+        if distance < min_distance and not(count_ones_in_radius(grid,pi,pj,5)) and abs(alpha)<np.pi/3:
             # print("alpha", alpha)
             min_distance = distance
             closest_pose = pose
@@ -261,22 +261,23 @@ def find_target(grid,poses_on_line,robot_pose):
 def heuristic(a, b):
     return np.linalg.norm(np.array(a) - np.array(b))
 
-def count_adjacent_ones(grid, x, y):
+def count_ones_in_radius(grid, x, y, radius):
     rows, cols = grid.shape
     count = 0
 
-    # All 8 possible neighbors: (dx, dy)
-    directions = [(-1, -1), (-1, 0), (-1, 1),
-                  ( 0, -1),          ( 0, 1),
-                  ( 1, -1), ( 1, 0), ( 1, 1)]
-
-    for dx, dy in directions:
-        nx, ny = x + dx, y + dy
-        if 0 <= nx < rows and 0 <= ny < cols:
-            if grid[nx, ny] == 1:
-                count += 1
-    # print("count", count)
+    for dx in range(-radius, radius + 1):
+        for dy in range(-radius, radius + 1):
+            nx, ny = x + dx, y + dy
+            # Skip center cell
+            if dx == 0 and dy == 0:
+                continue
+            # Check bounds
+            if 0 <= nx < rows and 0 <= ny < cols:
+                if grid[nx, ny] == 1:
+                    count += 1
+    print(count)
     return count
+
 
 def astar(grid, start, goal):
     si,sj = world_to_grid(start[0], start[1])
@@ -305,7 +306,7 @@ def astar(grid, start, goal):
                 neighbor = (nx, ny)
                 if neighbor not in visited:
                     new_cost = cost + np.hypot(dx, dy)  
-                    priority = new_cost + heuristic(neighbor, goal) + count_adjacent_ones(grid, nx, ny)  # Add heuristic cost to priority queue
+                    priority = new_cost + heuristic(neighbor, goal) + count_ones_in_radius(grid, nx, ny,4)  # Add heuristic cost to priority queue
                     heapq.heappush(open_set, (priority, new_cost, neighbor, path + [neighbor]))
     return []
 
@@ -448,7 +449,7 @@ success = "S"
 
 if not mapping:
     grid = fill_closed_regions(grid)  # Fill closed regions if mapping is enabled
-    grid = inflate_obstacles(grid, thickness=6)  # Inflate obstacles if mapping is enabled
+    grid = inflate_obstacles(grid, thickness=2)  # Inflate obstacles if mapping is enabled
     # new_grid = np.zeros((rows, cols), dtype=np.uint8)
     # new_grid[grid==1] = 1
     # new_grid[grid==-1] = 1
@@ -505,7 +506,7 @@ try:
         rel_lidar = front_lidar 
         front_lidar_dist = np.linalg.norm(rel_lidar, axis=1)
 
-        if np.min(front_lidar_dist) < 1.5:
+        if np.min(front_lidar_dist) < 0.8:
             print("Obstacle detected!")
             # if slam:
             #     continue
