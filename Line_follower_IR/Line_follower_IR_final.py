@@ -7,6 +7,7 @@ import keyboard
 import heapq
 from coppeliasim_zmqremoteapi_client import RemoteAPIClient
 from scipy.ndimage import label,binary_dilation
+from BAS_path_smoothening import BAS_Smoothner
 
 # Connect to CoppeliaSim
 client = RemoteAPIClient()
@@ -250,7 +251,7 @@ def find_target(grid,poses_on_line,robot_pose):
         # Check if pose is valid (not out of bounds and not in obstacle
         alpha = np.arctan2(y_local, x_local)
         # print(alpha)
-        if distance < min_distance and not(count_ones_in_radius(grid,pi,pj,5)) and abs(alpha)<np.pi/3:
+        if distance < min_distance and distance > 1 and not(count_ones_in_radius(grid,pi,pj,5)) and abs(alpha)<np.pi/3:
             # print("alpha", alpha)
             min_distance = distance
             closest_pose = pose
@@ -275,7 +276,7 @@ def count_ones_in_radius(grid, x, y, radius):
             if 0 <= nx < rows and 0 <= ny < cols:
                 if grid[nx, ny] == 1:
                     count += 1
-    print(count)
+    # print(count)
     return count
 
 
@@ -321,7 +322,7 @@ def world_to_bot_frame(global_point, bot_position, bot_theta):
     y_local =  np.sin(-bot_theta) * dx + np.cos(-bot_theta) * dy
     return np.array([x_local, y_local])
 
-def follow_till_line(waypoints,target,next_point):
+def follow_till_line(waypoints,target):
     for point in waypoints:
         
         temp_goal = grid_to_world(point[1],point[0])
@@ -332,33 +333,49 @@ def follow_till_line(waypoints,target,next_point):
             if dist <0.05:
                 break
             alpha = np.atan2(local[1],local[0]) if local[0] != 0 else np.pi/2
+            set_movement(bot_wheels,3,0,- float(8*alpha**3 + 5*alpha))
+            # if abs(alpha) >0.2:
+            #     # rot = - np.sign(alpha)*2
+            #     rot = - float(alpha**3 + 5*alpha)  
+            #     set_movement(bot_wheels, 0,0, rot)  
+            # else:
+            #     set_movement(bot_wheels, 20*dist, 0, 0)
+    print("done")
+    global slam
+    slam = False
 
-            if abs(alpha) >0.2:
-                rot = - np.sign(alpha)*2
-                set_movement(bot_wheels, 0,0, rot)  
-            else:
-                set_movement(bot_wheels, 20*dist, 0, 0)
+    while True:
+        robot_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")    
+        delta = target[2] - robot_pose[2]
+        if abs(delta) < 0.05:
+            break
+        set_movement(bot_wheels, 0, 0, -5*float(delta))
+
+def ftd_pure_pursuit(waypoints, target):
+    for point in waypoints:
+        
+        temp_goal = grid_to_world(point[1],point[0])
+        while True:
+            robot_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
+            local = world_to_bot_frame(temp_goal, robot_pose[:2], robot_pose[2])
+            dist = np.linalg.norm(local)
+            alpha = np.atan2(local[1],local[0]) if local[0] != 0 else np.pi/2
+            kappa = 2 * local[1] / (dist ** 2)
+            vel = 2
+    # lin speed scale = 0.06189 , ang speed scale = 0.194636
+            rot = -kappa*vel 
+            set_movement(bot_wheels, 0, vel, rot)
+            
     print("done")
     global slam
     slam = False
     while True:
         robot_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")    
-        # print("target reached", next_point)
-        # print(next_point)
-        dist = np.linalg.norm(np.array(next_point[:2]) - np.array(robot_pose[:2]))
-        if dist < 0.1:
+        delta = target[2] - robot_pose[2]
+        if abs(delta) < 0.05:
             break
-        robot_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
+        set_movement(bot_wheels, 0, 0, -5*float(delta))
 
-        local = world_to_bot_frame(next_point[:2], robot_pose[:2], robot_pose[2])
-        alpha = np.atan2(local[1],local[0]) if local[0] != 0 else np.pi/2
-
-# print("delta", delta)
-        if abs(alpha) >0.2:
-            set_movement(bot_wheels, 0, 0, float(-5*alpha))
-        else: 
-            set_movement(bot_wheels, 10*dist, 0, 0)
-            
 
 def get_sim_type(bas,SLAM):
     if bas and not SLAM:
@@ -444,20 +461,16 @@ teleop_rot_vel = 0
 slam = False
 grid = np.full((rows, cols),-1, dtype=np.int8) if mapping else np.load('grid3.npy')
 success = "S"
-# testing_target = (119, 194)
 
 
 if not mapping:
     grid = fill_closed_regions(grid)  # Fill closed regions if mapping is enabled
     grid = inflate_obstacles(grid, thickness=2)  # Inflate obstacles if mapping is enabled
-    # new_grid = np.zeros((rows, cols), dtype=np.uint8)
-    # new_grid[grid==1] = 1
-    # new_grid[grid==-1] = 1
     grid[grid==-1] = 1
 
 # ============== Poses on the Main Line ============================    
 poses_on_line = []
-with open('robot_pose.csv', 'r') as file:
+with open('robot_pose2.csv', 'r') as file:
     reader = csv.reader(file)
     for row in reader:
         poses_on_line.append(np.array(row, dtype=np.float32))
@@ -512,14 +525,13 @@ try:
             #     continue
             set_movement(bot_wheels,0,0,0)
             slam = True
-            # print("original 0s:", np.sum(grid == 0), "1s:", np.sum(grid == 1))
-            # print(testing_target)
-            # print(grid[testing_target[0], testing_target[1]])
+
             target,next_point = find_target(grid,poses_on_line,robot_pose)
             path = astar(grid, robot_xy, target[:2])
-            waypoints = subsample_path(path, step=16)
+            waypoints = subsample_path(path, step=12)
+            waypoints = BAS_Smoothner.smooth_path(waypoints,costmap=grid,iterations=200)
             plot_lidar(points,waypoints,target)
-            follow_till_line(waypoints,target,next_point)
+            follow_till_line(waypoints,target)
             
             # print(waypoints)
             
@@ -551,10 +563,6 @@ try:
         correction = Kp * error + Ki * integral + Kd * derivative
         last_error = error
 
-        # if counts == 1:
-        #     start_idx = np.argmin(distances)
-        # if total_distance> 1.05*totalLength:
-        #     break
         if deviation > 1:
             print("Failed")
             success = "F"

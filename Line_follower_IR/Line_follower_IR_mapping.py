@@ -506,9 +506,9 @@ try:
         distances = np.linalg.norm(traj - robot_xy, axis=1)
         deviation = np.min(distances)
 
-        if total_distance%1.5 <0.1:
+        if total_distance%0.5 <0.1:
             print(robot_pose)
-            with open('robot_pose.csv', 'a') as f:
+            with open('robot_pose2.csv', 'a') as f:
                 f.write(f"{robot_pose[0]},{robot_pose[1]},{robot_pose[2]}\n")
         
         total_dev+=deviation
