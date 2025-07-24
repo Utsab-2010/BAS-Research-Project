@@ -128,6 +128,8 @@ def update_grid(robot_pose, lidar_points, occupied_radius_cells=1):
     for x_rel, y_rel in lidar_points:
         # Transform to world coordinates
         dist = np.sqrt(x_rel**2 + y_rel**2)
+        if abs(dist-5) < 0.001:
+            continue
         x_world = x_robot + x_rel * np.cos(theta) - y_rel * np.sin(theta)
         y_world = y_robot + x_rel * np.sin(theta) + y_rel * np.cos(theta)
         end_i, end_j = world_to_grid(x_world, y_world)
@@ -139,9 +141,9 @@ def update_grid(robot_pose, lidar_points, occupied_radius_cells=1):
                 grid[cell[1], cell[0]] = 0
         # Mark a region around endpoint as occupied
         # print(dist)
-        if abs(dist-5) < 0.005:
-            # print('yooo')
-            continue
+        # if abs(dist-5) < 0.001:
+        #     # print('yooo')
+        #     continue
         for di in range(-occupied_radius_cells, occupied_radius_cells + 1):
             for dj in range(-occupied_radius_cells, occupied_radius_cells + 1):
                 ni, nj = end_i + di, end_j + dj
@@ -333,7 +335,9 @@ def follow_till_line(waypoints,target):
             if dist <0.05:
                 break
             alpha = np.atan2(local[1],local[0]) if local[0] != 0 else np.pi/2
-            set_movement(bot_wheels,3,0,- float(8*alpha**3 + 5*alpha))
+            set_movement(bot_wheels,target_speed*0.7,0,- float(3*alpha**3 + 5*alpha))
+            global traj
+            update_metrics(traj, robot_pose[2], np.array(robot_pose[:2]))
             # if abs(alpha) >0.2:
             #     # rot = - np.sign(alpha)*2
             #     rot = - float(alpha**3 + 5*alpha)  
@@ -347,33 +351,10 @@ def follow_till_line(waypoints,target):
     while True:
         robot_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")    
         delta = target[2] - robot_pose[2]
+        delta = (target[2] - robot_pose[2] + np.pi) % (2 * np.pi) - np.pi
         if abs(delta) < 0.05:
             break
-        set_movement(bot_wheels, 0, 0, -5*float(delta))
-
-def ftd_pure_pursuit(waypoints, target):
-    for point in waypoints:
-        
-        temp_goal = grid_to_world(point[1],point[0])
-        while True:
-            robot_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")
-            local = world_to_bot_frame(temp_goal, robot_pose[:2], robot_pose[2])
-            dist = np.linalg.norm(local)
-            alpha = np.atan2(local[1],local[0]) if local[0] != 0 else np.pi/2
-            kappa = 2 * local[1] / (dist ** 2)
-            vel = 2
-    # lin speed scale = 0.06189 , ang speed scale = 0.194636
-            rot = -kappa*vel 
-            set_movement(bot_wheels, 0, vel, rot)
-            
-    print("done")
-    global slam
-    slam = False
-    while True:
-        robot_pose = sim.getFloatArrayProperty(sim.handle_scene, "signal.robo_pose")    
-        delta = target[2] - robot_pose[2]
-        if abs(delta) < 0.05:
-            break
+        update_metrics(traj, robot_pose[2], np.array(robot_pose[:2]))
         set_movement(bot_wheels, 0, 0, -5*float(delta))
 
 
@@ -387,6 +368,26 @@ def get_sim_type(bas,SLAM):
     else:
         return 'Normal'
 
+def update_metrics(traj,robot_angle,robot_xy):
+    global total_dev, max_dev, min_dev, total_angle, max_angle, min_angle, last_yaw, total_distance, last_pos
+    distances = np.linalg.norm(traj - robot_xy, axis=1)
+    deviation = np.min(distances)
+    total_dev+=deviation
+    max_dev = deviation if max_dev < deviation else max_dev
+    min_dev = deviation if min_dev > deviation else min_dev
+    diff = (robot_angle - last_yaw + np.pi) % (2 * np.pi) - np.pi
+    angle_diff = abs(diff)
+    total_angle+=angle_diff
+    max_angle = angle_diff if angle_diff> max_angle else max_angle
+    min_angle = angle_diff if angle_diff < min_angle else min_angle
+    last_yaw = robot_angle
+
+    total_distance+=np.linalg.norm(robot_xy - last_pos)
+    last_pos = robot_xy
+
+    return deviation
+
+# Start the simulation
 
 sim.startSimulation()
 time.sleep(0.5)
@@ -428,14 +429,10 @@ error_l = 0
 error_r = 0
 d = 0.002
 d_inc = 0.01*d 
-#scaling factor for PIDs = D
-# D = 0.0008
-# D = 0.8*d*np.array([1,0.0001,0.01])
 D = 0.9*d
 
 b = np.random.randn(3)  # 3 for Kp, Ki, Kd
 b = b / np.linalg.norm(b)
-# start_idx = np.argmin(distances)
 
 # ============== Mapping ============================
 k = 1
@@ -450,22 +447,22 @@ origin_x = grid_width // 2
 origin_y = grid_height // 2
 
 # ============== Flags ============================
-target_speed = 4
+target_speed = 4.5
 SLAM = True # set to true if obstacles
-bas = False
+bas = True
 
 mapping = False
 teleop = mapping
 teleop_lin_vel = 0
 teleop_rot_vel = 0
 slam = False
-grid = np.full((rows, cols),-1, dtype=np.int8) if mapping else np.load('grid3.npy')
+grid = np.full((rows, cols),-1, dtype=np.int8) if mapping else np.load('grid_7obs.npy')
 success = "S"
 
 
 if not mapping:
     grid = fill_closed_regions(grid)  # Fill closed regions if mapping is enabled
-    grid = inflate_obstacles(grid, thickness=2)  # Inflate obstacles if mapping is enabled
+    grid = inflate_obstacles(grid, thickness=3)  # Inflate obstacles if mapping is enabled
     grid[grid==-1] = 1
 
 # ============== Poses on the Main Line ============================    
@@ -528,34 +525,35 @@ try:
 
             target,next_point = find_target(grid,poses_on_line,robot_pose)
             path = astar(grid, robot_xy, target[:2])
-            waypoints = subsample_path(path, step=12)
-            waypoints = BAS_Smoothner.smooth_path(waypoints,costmap=grid,iterations=200)
+            waypoints = subsample_path(path, step=8)
+            waypoints = BAS_Smoothner.smooth_path(waypoints,costmap=grid,alpha=20,beta=0,gamma=0.03,d=40,D=25,iterations=200)
             plot_lidar(points,waypoints,target)
             follow_till_line(waypoints,target)
             
             # print(waypoints)
             
         
-        distances = np.linalg.norm(traj - robot_xy, axis=1)
-        deviation = np.min(distances)
+        # distances = np.linalg.norm(traj - robot_xy, axis=1)
+        # deviation = np.min(distances)
 
         # if total_distance%3 <0.1:
         #     print(robot_pose)
         #     with open('robot_pose.csv', 'a') as f:
         #         f.write(f"{robot_pose[0]},{robot_pose[1]},{robot_pose[2]}\n")
         
-        total_dev+=deviation
-        max_dev = deviation if max_dev < deviation else max_dev
-        min_dev = deviation if min_dev > deviation else min_dev
-        diff = (robot_angle - last_yaw + np.pi) % (2 * np.pi) - np.pi
-        angle_diff = abs(diff)
-        total_angle+=angle_diff
-        max_angle = angle_diff if angle_diff> max_angle else max_angle
-        min_angle = angle_diff if angle_diff < min_angle else min_angle
-        last_yaw = robot_angle
+        # total_dev+=deviation
+        # max_dev = deviation if max_dev < deviation else max_dev
+        # min_dev = deviation if min_dev > deviation else min_dev
+        # diff = (robot_angle - last_yaw + np.pi) % (2 * np.pi) - np.pi
+        # angle_diff = abs(diff)
+        # total_angle+=angle_diff
+        # max_angle = angle_diff if angle_diff> max_angle else max_angle
+        # min_angle = angle_diff if angle_diff < min_angle else min_angle
+        # last_yaw = robot_angle
 
-        total_distance+=np.linalg.norm(robot_xy - last_pos)
-        last_pos = robot_xy
+        # total_distance+=np.linalg.norm(robot_xy - last_pos)
+        # last_pos = robot_xy
+        deviation = update_metrics(traj, robot_angle, robot_xy)
 
         error = get_error(vision_sensors, sensor_weights)
         integral += error
@@ -585,13 +583,14 @@ finally:
     if not mapping:
         print_metrics(total_distance,total_dev,time.time()-start_time,max_angle,min_angle,total_angle,max_dev,min_dev,counts)
         print("Final BAS params:", Kp, Ki, Kd)
-        sim_type = get_sim_type(bas,SLAM)
-        # with open('simulation_metrics.csv', 'a') as f:
-        #     total_time = time.time() - start_time
-        #     f.write(f"{sim_type},{target_speed},{total_distance},{total_time},{total_distance/total_time},{min_angle},{max_angle},{total_angle/counts},{min_dev},{max_dev},{total_dev/counts},{success},{Kp},{Ki},{Kd}\n")
+        # sim_type = get_sim_type(bas,SLAM)
+        sim_type = "7-obstacles"
+        with open('simulation_metrics.csv', 'a') as f:
+            total_time = time.time() - start_time
+            f.write(f"{sim_type},{target_speed},{total_distance},{total_time},{total_distance/total_time},{min_angle},{max_angle},{total_angle/counts},{min_dev},{max_dev},{total_dev/counts},{success},{Kp},{Ki},{Kd}\n")
     
     time.sleep(0.5)  # Allow time for the robot to stop
     if mapping:
-        np.save("grid3.npy", grid)
+        np.save("grid_7obs.npy", grid)
     sim.stopSimulation()
 
