@@ -1,4 +1,4 @@
-﻿# BAS-Research-Project [Discontinued]
+﻿# BAS-Research-Project 
 This repository contains my work for a remote intern under [Prof. Shuai Li](https://scholar.google.com/citations?user=H8UOWqoAAAAJ&hl=en) on Beetle Antenna Search Optimisation. This work was co-advised by  [Prof. Atajahangir Moshayedi](https://scholar.google.co.in/citations?user=nLz_vcoAAAAJ&hl=en). I worked on implementing BAS algorithm for ground vehicle navigation, obstacle avoidance and was looking into ways of involving it with Spiking Neural Networks - for robotic arm control optimisation. 
 
 This project was later compiled and published at **EAI Endorsed Transactions on AI and Robotics**
@@ -12,6 +12,7 @@ Some snippets of my work:
 - https://youtu.be/t4LBuUDDJfg?si=LZ3su7grB0ZW6tr0
 - https://youtu.be/RCSkwJ7f6a0?si=bLq886zyZyfjaDKZ
 - https://youtu.be/RCSkwJ7f6a0?si=uFw6TZ9RiPfPKj-o
+
 
 
 
